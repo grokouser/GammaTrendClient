@@ -5,8 +5,9 @@ REM Push to the project root (parent of scripts/).
 REM pushd supports UNC paths (e.g. \\wsl.localhost\...) which cd /d does not.
 pushd "%~dp0.."
 
-REM Allow git to access the WSL repository via UNC path
-git config --global --add safe.directory "%~dp0.." 2>nul
+REM After pushd, %CD% is an absolute Windows path (e.g. Y:\...).
+REM Add it as a git safe.directory so git works from the WSL UNC path.
+git config --global --add safe.directory "%CD%" 2>nul
 
 REM Check for uncommitted changes
 git status --porcelain | findstr . >nul 2>&1
