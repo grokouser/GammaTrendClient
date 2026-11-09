@@ -2,6 +2,15 @@
   "name": "gt-api-test",
   "version-string": "0.1.0",
   "dependencies": [
-    "cpp-httplib"
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": [
+        "gui", "widgets", "network", "concurrent", "thread",
+        "async-io", "doubleconversion", "freetype", "harfbuzz",
+        "pcre2", "png"
+      ]
+    },
+    "qcustomplot"
   ]
 }
