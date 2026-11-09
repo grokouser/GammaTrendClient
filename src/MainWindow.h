@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include "Telemetry.h"
+#include <QTcpSocket>
 
 class QCustomPlot;
 class QCPGraph;
@@ -10,6 +11,7 @@ class QCPItemLine;
 class QCheckBox;
 class QSlider;
 class QComboBox;
+class QPushButton;
 class QLabel;
 
 class MainWindow : public QMainWindow
@@ -31,6 +33,7 @@ private slots:
     void smoothingChanged(int minutes);
     void showLast(double seconds);
     void exportPng();
+    void testConnection();
 
 private:
     void buildUi();
@@ -55,6 +58,7 @@ private:
     QCheckBox   *m_cbErrors = nullptr;
     QCheckBox   *m_cbGpu = nullptr;
     QCheckBox   *m_cbCpu = nullptr;
+    QPushButton *m_testBtn = nullptr;
 
     // navigator selection items
     QCPItemRect  *m_navRect = nullptr;

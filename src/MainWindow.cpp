@@ -89,6 +89,8 @@ void MainWindow::buildUi()
     ctrl->addWidget(genBtn, 0, 0); ctrl->addWidget(btn24h, 0, 1);
     ctrl->addWidget(btn7d, 0, 2);  ctrl->addWidget(btn30d, 0, 3);
     ctrl->addWidget(btnAll, 0, 4); ctrl->addWidget(expBtn, 0, 5);
+    m_testBtn = new QPushButton(QStringLiteral("Test Connection"));
+    ctrl->addWidget(m_testBtn, 0, 6);
 
     ctrl->addWidget(new QLabel(QStringLiteral("Interval bin:")), 1, 0);
     m_binCombo = new QComboBox;
@@ -184,6 +186,7 @@ void MainWindow::buildUi()
     // ---- connections ------------------------------------------------------
     connect(genBtn, &QPushButton::clicked, this, &MainWindow::regenerate);
     connect(expBtn, &QPushButton::clicked, this, &MainWindow::exportPng);
+    connect(m_testBtn, &QPushButton::clicked, this, &MainWindow::testConnection);
     connect(btn24h, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 1);   });
     connect(btn7d,  &QPushButton::clicked, this, [this]{ showLast(86400.0 * 7);   });
     connect(btn30d, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 30);  });
@@ -406,6 +409,32 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *ev)
     default: break;
     }
     return QMainWindow::eventFilter(obj, ev);
+}
+
+void MainWindow::testConnection()
+{
+    QTcpSocket socket;
+    socket.connectToHost(QStringLiteral("localhost"), 22437);
+    if (!socket.waitForConnected(3000)) {
+        QMessageBox::warning(this, QStringLiteral("Connection test failed"),
+            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        return;
+    }
+    socket.write(QStringLiteral("test\n").toUtf8());
+    if (!socket.waitForReadyRead(3000)) {
+        QMessageBox::warning(this, QStringLiteral("Connection test failed"),
+            QStringLiteral("Connected but no response from localhost:22437."));
+        return;
+    }
+    QByteArray response = socket.readAll();
+    socket.disconnectFromHost();
+    if (response.contains("Hello World")) {
+        QMessageBox::information(this, QStringLiteral("Connection test success!"),
+            QStringLiteral("Successfully connected to H3DPolarisServer on port 22437."));
+    } else {
+        QMessageBox::warning(this, QStringLiteral("Connection test failed"),
+            QStringLiteral("Unexpected response: %1").arg(QString::fromUtf8(response)));
+    }
 }
 
 void MainWindow::exportPng()

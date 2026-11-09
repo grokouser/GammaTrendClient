@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 COMPONENTS Widgets PrintSupport CONFIG REQUIRED)
+find_package(Qt6 COMPONENTS Widgets PrintSupport Network CONFIG REQUIRED)
 # qcustomplot ships as a qmake-built DLL + import libs (no CMake config)
 set(QCP_ROOT "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows")
 add_library(qcustomplot::qcustomplot SHARED IMPORTED)
@@ -24,9 +24,9 @@ add_executable(gt_api_test
 )
 
 if(TARGET qcustomplot::qcustomplot)
-  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport qcustomplot::qcustomplot)
+  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport Qt6::Network qcustomplot::qcustomplot)
 else()
-  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport qcustomplot)
+  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport Qt6::Network qcustomplot)
 endif()
 
 # app-local Qt runtime for running straight out of the build tree
