@@ -18,6 +18,13 @@
 #include <QGuiApplication>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QDialog>
+#include <QListWidget>
+#include <QVBoxLayout>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <cmath>
 
 static QString fmtSecs(double s)
@@ -91,6 +98,9 @@ void MainWindow::buildUi()
     ctrl->addWidget(btnAll, 0, 4); ctrl->addWidget(expBtn, 0, 5);
     m_testBtn = new QPushButton(QStringLiteral("Test Connection"));
     ctrl->addWidget(m_testBtn, 0, 6);
+
+    m_showDetectorsBtn = new QPushButton(QStringLiteral("Show Detectors"));
+    ctrl->addWidget(m_showDetectorsBtn, 0, 7);
 
     ctrl->addWidget(new QLabel(QStringLiteral("Interval bin:")), 1, 0);
     m_binCombo = new QComboBox;
@@ -187,6 +197,7 @@ void MainWindow::buildUi()
     connect(genBtn, &QPushButton::clicked, this, &MainWindow::regenerate);
     connect(expBtn, &QPushButton::clicked, this, &MainWindow::exportPng);
     connect(m_testBtn, &QPushButton::clicked, this, &MainWindow::testConnection);
+    connect(m_showDetectorsBtn, &QPushButton::clicked, this, &MainWindow::showDetectors);
     connect(btn24h, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 1);   });
     connect(btn7d,  &QPushButton::clicked, this, [this]{ showLast(86400.0 * 7);   });
     connect(btn30d, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 30);  });
@@ -435,6 +446,83 @@ void MainWindow::testConnection()
         QMessageBox::warning(this, QStringLiteral("Connection test failed"),
             QStringLiteral("Unexpected response: %1").arg(QString::fromUtf8(response)));
     }
+}
+
+void MainWindow::showDetectors()
+{
+    QTcpSocket socket;
+    socket.connectToHost(QStringLiteral("localhost"), 22437);
+    if (!socket.waitForConnected(3000)) {
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
+            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        return;
+    }
+
+    // The console interface defaults to text mode; switch it to JSON for this
+    // connection, then request the detector list.
+    socket.write(QStringLiteral("mode json\n").toUtf8());
+    QByteArray ack = readResponse(socket, 3000);
+    if (ack.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
+            QStringLiteral("Connected but no response from localhost:22437."));
+        return;
+    }
+
+    socket.write(QStringLiteral("detectors\n").toUtf8());
+    QByteArray response = readResponse(socket, 3000);
+    socket.disconnectFromHost();
+
+    if (response.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
+            QStringLiteral("Connected but no detector list from localhost:22437."));
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(response);
+    if (doc.isNull() || !doc.isObject()) {
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
+            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        return;
+    }
+
+    QJsonArray detectors = doc.object().value(QStringLiteral("detectors")).toArray();
+    QStringList names;
+    for (const QJsonValue &v : detectors)
+        names << v.toObject().value(QStringLiteral("name")).toString();
+
+    // Popup window with the list of detectors (names only, for now).
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Detectors"));
+    QVBoxLayout *lay = new QVBoxLayout(&dialog);
+    QListWidget *list = new QListWidget(&dialog);
+    if (names.isEmpty())
+        list->addItem(QStringLiteral("(no detectors in database)"));
+    else
+        list->addItems(names);
+    lay->addWidget(list);
+    QPushButton *closeBtn = new QPushButton(QStringLiteral("Close"), &dialog);
+    lay->addWidget(closeBtn, 0, Qt::AlignRight);
+    connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    dialog.exec();
+}
+
+QByteArray MainWindow::readResponse(QTcpSocket &socket, int timeoutMs)
+{
+    QByteArray data;
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < timeoutMs) {
+        int remaining = timeoutMs - int(timer.elapsed());
+        if (remaining <= 0) break;
+        if (socket.waitForReadyRead(remaining < 1000 ? remaining : 1000)) {
+            data += socket.readAll();
+            if (data.endsWith('\n'))
+                break;
+        } else {
+            break;
+        }
+    }
+    return data;
 }
 
 void MainWindow::exportPng()

@@ -13,6 +13,8 @@ class QSlider;
 class QComboBox;
 class QPushButton;
 class QLabel;
+class QDialog;
+class QListWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -34,6 +36,7 @@ private slots:
     void showLast(double seconds);
     void exportPng();
     void testConnection();
+    void showDetectors();
 
 private:
     void buildUi();
@@ -41,6 +44,9 @@ private:
     void buildDailyPlot();
     void updateNavRect();
     void setSelectRange(double a, double b);
+
+    // console-interface helper (port 22437)
+    QByteArray readResponse(QTcpSocket &socket, int timeoutMs);
 
     // data
     TelemetryData m_raw;
@@ -59,6 +65,7 @@ private:
     QCheckBox   *m_cbGpu = nullptr;
     QCheckBox   *m_cbCpu = nullptr;
     QPushButton *m_testBtn = nullptr;
+    QPushButton *m_showDetectorsBtn = nullptr;
 
     // navigator selection items
     QCPItemRect  *m_navRect = nullptr;
