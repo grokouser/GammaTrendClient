@@ -72,7 +72,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
 void MainWindow::buildUi()
 {
-    setWindowTitle(QStringLiteral("GT API Test — Telemetry Dashboard (Qt6 + QCustomPlot)"));
+    setWindowTitle(QStringLiteral("Gamma Trend Client"));
 
     QWidget *central = new QWidget(this);
     setCentralWidget(central);
