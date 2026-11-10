@@ -798,6 +798,10 @@ void MainWindow::loadChartData()
         QStringLiteral("Loaded chart %1: %2 points").arg(chartId).arg(points.size()));
 }
 
+// Remove the console prompt prefix/suffix from a server response.
+// The server sends "H3D GammaTrend ==> " before and after each response.
+static QByteArray stripConsolePrompt(const QByteArray &data);
+
 QByteArray MainWindow::readResponse(QTcpSocket &socket, int timeoutMs)
 {
     QByteArray data;
@@ -814,7 +818,24 @@ QByteArray MainWindow::readResponse(QTcpSocket &socket, int timeoutMs)
             break;
         }
     }
-    return data;
+    // Strip the console prompt ("H3D GammaTrend ==> ") that the server
+    // prepends/appends to every response, so the payload can be parsed as JSON.
+    return stripConsolePrompt(data);
+}
+
+// Remove the console prompt prefix/suffix from a server response.
+// The server sends "H3D GammaTrend ==> " before and after each response.
+static QByteArray stripConsolePrompt(const QByteArray &data)
+{
+    const QByteArray prompt("H3D GammaTrend ==> ");
+    QByteArray result = data;
+    if (result.startsWith(prompt))
+        result.remove(0, prompt.size());
+    if (result.endsWith(prompt + "\n"))
+        result.chop(prompt.size() + 1);
+    else if (result.endsWith(prompt))
+        result.chop(prompt.size());
+    return result.trimmed();
 }
 
 void MainWindow::exportPng()
