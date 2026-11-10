@@ -472,7 +472,7 @@ void MainWindow::showDetectors()
         return;
     }
 
-    socket.write(QStringLiteral("detectors\n").toUtf8());
+    socket.write(QStringLiteral("list detectors\n").toUtf8());
     QByteArray response = readResponse(socket, 3000);
     socket.disconnectFromHost();
 
@@ -530,7 +530,7 @@ void MainWindow::showLocations()
         return;
     }
 
-    socket.write(QStringLiteral("locations\n").toUtf8());
+    socket.write(QStringLiteral("list locations\n").toUtf8());
     QByteArray response = readResponse(socket, 3000);
     socket.disconnectFromHost();
 
