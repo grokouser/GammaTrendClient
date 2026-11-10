@@ -1,7 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include "Telemetry.h"
-#include <QTcpSocket>
+#include "cpp-httplib/httplib.h"
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
@@ -51,13 +51,17 @@ private:
     void updateNavRect();
     void setSelectRange(double a, double b);
 
-    // console-interface helper (port 22437)
-    QByteArray readResponse(QTcpSocket &socket, int timeoutMs);
+    // HTTP client helper (port 22438, or https://api.h3drms.com)
+    // Returns the response body, or empty on failure.
+    std::string httpGet(const std::string &path, int timeoutSec = 10);
 
     // data
     TelemetryData m_raw;
     int m_binSec = 300;          // current display bin (seconds)
     int m_smoothMin = 0;         // moving-average window (minutes, 0 = off)
+
+    // base URL for the server HTTP API (http://localhost:22438 or https://api.h3drms.com)
+    std::string m_baseUrl = "http://localhost:22438";
 
     // widgets
     QCustomPlot *m_plot = nullptr;      // main telemetry plot
