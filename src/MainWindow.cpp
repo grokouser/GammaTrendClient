@@ -102,6 +102,9 @@ void MainWindow::buildUi()
     m_showDetectorsBtn = new QPushButton(QStringLiteral("Show Detectors"));
     ctrl->addWidget(m_showDetectorsBtn, 0, 7);
 
+    m_showLocationsBtn = new QPushButton(QStringLiteral("Show Locations"));
+    ctrl->addWidget(m_showLocationsBtn, 0, 8);
+
     ctrl->addWidget(new QLabel(QStringLiteral("Interval bin:")), 1, 0);
     m_binCombo = new QComboBox;
     m_binCombo->addItems({QStringLiteral("1 min (raw)"), QStringLiteral("5 min"),
@@ -198,6 +201,7 @@ void MainWindow::buildUi()
     connect(expBtn, &QPushButton::clicked, this, &MainWindow::exportPng);
     connect(m_testBtn, &QPushButton::clicked, this, &MainWindow::testConnection);
     connect(m_showDetectorsBtn, &QPushButton::clicked, this, &MainWindow::showDetectors);
+    connect(m_showLocationsBtn, &QPushButton::clicked, this, &MainWindow::showLocations);
     connect(btn24h, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 1);   });
     connect(btn7d,  &QPushButton::clicked, this, [this]{ showLast(86400.0 * 7);   });
     connect(btn30d, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 30);  });
@@ -497,6 +501,64 @@ void MainWindow::showDetectors()
     QListWidget *list = new QListWidget(&dialog);
     if (names.isEmpty())
         list->addItem(QStringLiteral("(no detectors in database)"));
+    else
+        list->addItems(names);
+    lay->addWidget(list);
+    QPushButton *closeBtn = new QPushButton(QStringLiteral("Close"), &dialog);
+    lay->addWidget(closeBtn, 0, Qt::AlignRight);
+    connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    dialog.exec();
+}
+
+void MainWindow::showLocations()
+{
+    QTcpSocket socket;
+    socket.connectToHost(QStringLiteral("localhost"), 22437);
+    if (!socket.waitForConnected(3000)) {
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
+            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        return;
+    }
+
+    // The console interface defaults to text mode; switch it to JSON for this
+    // connection, then request the location list.
+    socket.write(QStringLiteral("mode json\n").toUtf8());
+    QByteArray ack = readResponse(socket, 3000);
+    if (ack.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
+            QStringLiteral("Connected but no response from localhost:22437."));
+        return;
+    }
+
+    socket.write(QStringLiteral("locations\n").toUtf8());
+    QByteArray response = readResponse(socket, 3000);
+    socket.disconnectFromHost();
+
+    if (response.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
+            QStringLiteral("Connected but no location list from localhost:22437."));
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(response);
+    if (doc.isNull() || !doc.isObject()) {
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
+            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        return;
+    }
+
+    QJsonArray locations = doc.object().value(QStringLiteral("locations")).toArray();
+    QStringList names;
+    for (const QJsonValue &v : locations)
+        names << v.toObject().value(QStringLiteral("name")).toString();
+
+    // Popup window with the list of locations (names only, for now).
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Locations"));
+    QVBoxLayout *lay = new QVBoxLayout(&dialog);
+    QListWidget *list = new QListWidget(&dialog);
+    if (names.isEmpty())
+        list->addItem(QStringLiteral("(no locations in database)"));
     else
         list->addItems(names);
     lay->addWidget(list);

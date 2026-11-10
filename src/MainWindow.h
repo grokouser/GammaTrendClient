@@ -37,6 +37,7 @@ private slots:
     void exportPng();
     void testConnection();
     void showDetectors();
+    void showLocations();
 
 private:
     void buildUi();
@@ -66,6 +67,7 @@ private:
     QCheckBox   *m_cbCpu = nullptr;
     QPushButton *m_testBtn = nullptr;
     QPushButton *m_showDetectorsBtn = nullptr;
+    QPushButton *m_showLocationsBtn = nullptr;
 
     // navigator selection items
     QCPItemRect  *m_navRect = nullptr;
