@@ -794,6 +794,17 @@ void MainWindow::loadChartData()
     }
     logDebug(QStringLiteral("loadChartData: selected chart id=%1 name=%2").arg(chartId).arg(selected->text()));
 
+    // Step 2.5: ask the user for the max rows to limit the chart data output.
+    bool ok = false;
+    int maxRows = QInputDialog::getInt(this, QStringLiteral("Max Rows"),
+        QStringLiteral("Enter maximum number of rows to fetch (e.g. 100, or -1 for all):"),
+        100, -1000000, 1000000, 1, &ok);
+    if (!ok) {
+        logDebug(QStringLiteral("loadChartData: user cancelled max rows dialog"));
+        return;
+    }
+    logDebug(QStringLiteral("loadChartData: user requested maxrows=%1").arg(maxRows));
+
     // Step 3: clear the demo data from the GUI chart currently showing.
     m_raw = TelemetryData();
     m_plot->clearGraphs();
@@ -803,7 +814,7 @@ void MainWindow::loadChartData()
     m_navigator->replot();
     m_daily->replot();
 
-    // Step 4: connect again, set maxrows -1, mode json, list chartdata <id>.
+    // Step 4: connect again, set maxrows <N>, mode json, list chartdata <id>.
     socket.connectToHost(QStringLiteral("localhost"), 22437);
     if (!socket.waitForConnected(3000)) {
         QString err = QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString());
@@ -812,7 +823,8 @@ void MainWindow::loadChartData()
         return;
     }
 
-    socket.write(QStringLiteral("maxrows -1\n").toUtf8());
+    QString maxrowsCmd = QStringLiteral("maxrows %1\n").arg(maxRows);
+    socket.write(maxrowsCmd.toUtf8());
     readResponse(socket, 3000);
     socket.write(QStringLiteral("mode json\n").toUtf8());
     readResponse(socket, 3000);
