@@ -105,6 +105,9 @@ void MainWindow::buildUi()
     m_showLocationsBtn = new QPushButton(QStringLiteral("Show Locations"));
     ctrl->addWidget(m_showLocationsBtn, 0, 8);
 
+    m_showChartsBtn = new QPushButton(QStringLiteral("Show Charts"));
+    ctrl->addWidget(m_showChartsBtn, 0, 9);
+
     ctrl->addWidget(new QLabel(QStringLiteral("Interval bin:")), 1, 0);
     m_binCombo = new QComboBox;
     m_binCombo->addItems({QStringLiteral("1 min (raw)"), QStringLiteral("5 min"),
@@ -202,6 +205,7 @@ void MainWindow::buildUi()
     connect(m_testBtn, &QPushButton::clicked, this, &MainWindow::testConnection);
     connect(m_showDetectorsBtn, &QPushButton::clicked, this, &MainWindow::showDetectors);
     connect(m_showLocationsBtn, &QPushButton::clicked, this, &MainWindow::showLocations);
+    connect(m_showChartsBtn, &QPushButton::clicked, this, &MainWindow::showCharts);
     connect(btn24h, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 1);   });
     connect(btn7d,  &QPushButton::clicked, this, [this]{ showLast(86400.0 * 7);   });
     connect(btn30d, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 30);  });
@@ -559,6 +563,64 @@ void MainWindow::showLocations()
     QListWidget *list = new QListWidget(&dialog);
     if (names.isEmpty())
         list->addItem(QStringLiteral("(no locations in database)"));
+    else
+        list->addItems(names);
+    lay->addWidget(list);
+    QPushButton *closeBtn = new QPushButton(QStringLiteral("Close"), &dialog);
+    lay->addWidget(closeBtn, 0, Qt::AlignRight);
+    connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    dialog.exec();
+}
+
+void MainWindow::showCharts()
+{
+    QTcpSocket socket;
+    socket.connectToHost(QStringLiteral("localhost"), 22437);
+    if (!socket.waitForConnected(3000)) {
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
+            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        return;
+    }
+
+    // The console interface defaults to text mode; switch it to JSON for this
+    // connection, then request the chart list.
+    socket.write(QStringLiteral("mode json\n").toUtf8());
+    QByteArray ack = readResponse(socket, 3000);
+    if (ack.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
+            QStringLiteral("Connected but no response from localhost:22437."));
+        return;
+    }
+
+    socket.write(QStringLiteral("list charts\n").toUtf8());
+    QByteArray response = readResponse(socket, 3000);
+    socket.disconnectFromHost();
+
+    if (response.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
+            QStringLiteral("Connected but no chart list from localhost:22437."));
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(response);
+    if (doc.isNull() || !doc.isObject()) {
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
+            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        return;
+    }
+
+    QJsonArray charts = doc.object().value(QStringLiteral("charts")).toArray();
+    QStringList names;
+    for (const QJsonValue &v : charts)
+        names << v.toObject().value(QStringLiteral("name")).toString();
+
+    // Popup window with the list of charts (names only, for now).
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Charts"));
+    QVBoxLayout *lay = new QVBoxLayout(&dialog);
+    QListWidget *list = new QListWidget(&dialog);
+    if (names.isEmpty())
+        list->addItem(QStringLiteral("(no charts in database)"));
     else
         list->addItems(names);
     lay->addWidget(list);
