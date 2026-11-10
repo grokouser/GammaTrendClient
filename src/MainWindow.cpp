@@ -27,6 +27,52 @@
 #include <QJsonValue>
 #include <cmath>
 
+// ---------------------------------------------------------------------------
+// Client-side logging: append-only log file with a big banner on each launch.
+// ---------------------------------------------------------------------------
+static QString logFilePath()
+{
+    // Log next to the application executable.
+    return QCoreApplication::applicationDirPath() + "/gt_client.log";
+}
+
+static void appendToLog(const QString &text)
+{
+    QFile f(logFilePath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        return;
+    QTextStream out(&f);
+    out << text << "\n";
+    f.flush();
+}
+
+static QString timestamp()
+{
+    return QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss.zzz"));
+}
+
+static void writeLogBanner()
+{
+    QString banner;
+    banner += QStringLiteral("\n");
+    banner += QStringLiteral("==============================================================================\n");
+    banner += QStringLiteral("  GAMMA TREND CLIENT — NEW LAUNCH\n");
+    banner += QStringLiteral("  %1\n").arg(timestamp());
+    banner += QStringLiteral("==============================================================================\n");
+    banner += QStringLiteral("\n");
+    appendToLog(banner);
+}
+
+static void logDebug(const QString &message)
+{
+    appendToLog(QStringLiteral("[%1] DEBUG: %2").arg(timestamp(), message));
+}
+
+static void logError(const QString &message)
+{
+    appendToLog(QStringLiteral("[%1] ERROR: %2").arg(timestamp(), message));
+}
+
 static QString fmtSecs(double s)
 {
     return QDateTime::fromSecsSinceEpoch(qint64(s))
@@ -75,6 +121,7 @@ static void binMean(const QVector<double> &key, const QVector<double> &v,
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     buildUi();
+    writeLogBanner();
 }
 
 void MainWindow::buildUi()
@@ -436,37 +483,44 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *ev)
 
 void MainWindow::testConnection()
 {
+    logDebug(QStringLiteral("testConnection: connecting to localhost:22437"));
     QTcpSocket socket;
     socket.connectToHost(QStringLiteral("localhost"), 22437);
     if (!socket.waitForConnected(3000)) {
-        QMessageBox::warning(this, QStringLiteral("Connection test failed"),
-            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        QString err = QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString());
+        logError(QStringLiteral("testConnection: %1").arg(socket.errorString()));
+        QMessageBox::warning(this, QStringLiteral("Connection test failed"), err);
         return;
     }
     socket.write(QStringLiteral("test\n").toUtf8());
     if (!socket.waitForReadyRead(3000)) {
-        QMessageBox::warning(this, QStringLiteral("Connection test failed"),
-            QStringLiteral("Connected but no response from localhost:22437."));
+        QString err = QStringLiteral("Connected but no response from localhost:22437.");
+        logError(QStringLiteral("testConnection: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Connection test failed"), err);
         return;
     }
     QByteArray response = socket.readAll();
     socket.disconnectFromHost();
+    logDebug(QStringLiteral("testConnection: response=%1").arg(QString::fromUtf8(response).trimmed()));
     if (response.contains("Hello World")) {
         QMessageBox::information(this, QStringLiteral("Connection test success!"),
             QStringLiteral("Successfully connected to H3DPolarisServer on port 22437."));
     } else {
-        QMessageBox::warning(this, QStringLiteral("Connection test failed"),
-            QStringLiteral("Unexpected response: %1").arg(QString::fromUtf8(response)));
+        QString err = QStringLiteral("Unexpected response: %1").arg(QString::fromUtf8(response));
+        logError(QStringLiteral("testConnection: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Connection test failed"), err);
     }
 }
 
 void MainWindow::showDetectors()
 {
+    logDebug(QStringLiteral("showDetectors: connecting to localhost:22437"));
     QTcpSocket socket;
     socket.connectToHost(QStringLiteral("localhost"), 22437);
     if (!socket.waitForConnected(3000)) {
-        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
-            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        QString err = QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString());
+        logError(QStringLiteral("showDetectors: %1").arg(socket.errorString()));
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"), err);
         return;
     }
 
@@ -475,8 +529,9 @@ void MainWindow::showDetectors()
     socket.write(QStringLiteral("mode json\n").toUtf8());
     QByteArray ack = readResponse(socket, 3000);
     if (ack.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
-            QStringLiteral("Connected but no response from localhost:22437."));
+        QString err = QStringLiteral("Connected but no response from localhost:22437.");
+        logError(QStringLiteral("showDetectors: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"), err);
         return;
     }
 
@@ -485,15 +540,17 @@ void MainWindow::showDetectors()
     socket.disconnectFromHost();
 
     if (response.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
-            QStringLiteral("Connected but no detector list from localhost:22437."));
+        QString err = QStringLiteral("Connected but no detector list from localhost:22437.");
+        logError(QStringLiteral("showDetectors: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"), err);
         return;
     }
 
     QJsonDocument doc = QJsonDocument::fromJson(response);
     if (doc.isNull() || !doc.isObject()) {
-        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"),
-            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        QString err = QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response));
+        logError(QStringLiteral("showDetectors: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Detectors failed"), err);
         return;
     }
 
@@ -520,11 +577,13 @@ void MainWindow::showDetectors()
 
 void MainWindow::showLocations()
 {
+    logDebug(QStringLiteral("showLocations: connecting to localhost:22437"));
     QTcpSocket socket;
     socket.connectToHost(QStringLiteral("localhost"), 22437);
     if (!socket.waitForConnected(3000)) {
-        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
-            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        QString err = QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString());
+        logError(QStringLiteral("showLocations: %1").arg(socket.errorString()));
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"), err);
         return;
     }
 
@@ -533,8 +592,9 @@ void MainWindow::showLocations()
     socket.write(QStringLiteral("mode json\n").toUtf8());
     QByteArray ack = readResponse(socket, 3000);
     if (ack.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
-            QStringLiteral("Connected but no response from localhost:22437."));
+        QString err = QStringLiteral("Connected but no response from localhost:22437.");
+        logError(QStringLiteral("showLocations: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"), err);
         return;
     }
 
@@ -543,15 +603,17 @@ void MainWindow::showLocations()
     socket.disconnectFromHost();
 
     if (response.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
-            QStringLiteral("Connected but no location list from localhost:22437."));
+        QString err = QStringLiteral("Connected but no location list from localhost:22437.");
+        logError(QStringLiteral("showLocations: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"), err);
         return;
     }
 
     QJsonDocument doc = QJsonDocument::fromJson(response);
     if (doc.isNull() || !doc.isObject()) {
-        QMessageBox::warning(this, QStringLiteral("Show Locations failed"),
-            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        QString err = QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response));
+        logError(QStringLiteral("showLocations: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Locations failed"), err);
         return;
     }
 
@@ -578,11 +640,13 @@ void MainWindow::showLocations()
 
 void MainWindow::showCharts()
 {
+    logDebug(QStringLiteral("showCharts: connecting to localhost:22437"));
     QTcpSocket socket;
     socket.connectToHost(QStringLiteral("localhost"), 22437);
     if (!socket.waitForConnected(3000)) {
-        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
-            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        QString err = QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString());
+        logError(QStringLiteral("showCharts: %1").arg(socket.errorString()));
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"), err);
         return;
     }
 
@@ -591,8 +655,9 @@ void MainWindow::showCharts()
     socket.write(QStringLiteral("mode json\n").toUtf8());
     QByteArray ack = readResponse(socket, 3000);
     if (ack.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
-            QStringLiteral("Connected but no response from localhost:22437."));
+        QString err = QStringLiteral("Connected but no response from localhost:22437.");
+        logError(QStringLiteral("showCharts: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"), err);
         return;
     }
 
@@ -601,15 +666,17 @@ void MainWindow::showCharts()
     socket.disconnectFromHost();
 
     if (response.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
-            QStringLiteral("Connected but no chart list from localhost:22437."));
+        QString err = QStringLiteral("Connected but no chart list from localhost:22437.");
+        logError(QStringLiteral("showCharts: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"), err);
         return;
     }
 
     QJsonDocument doc = QJsonDocument::fromJson(response);
     if (doc.isNull() || !doc.isObject()) {
-        QMessageBox::warning(this, QStringLiteral("Show Charts failed"),
-            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        QString err = QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response));
+        logError(QStringLiteral("showCharts: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Charts failed"), err);
         return;
     }
 
@@ -637,19 +704,22 @@ void MainWindow::showCharts()
 void MainWindow::loadChartData()
 {
     // Step 1: connect to server and get the JSON list of charts.
+    logDebug(QStringLiteral("loadChartData: step 1 - connecting to localhost:22437"));
     QTcpSocket socket;
     socket.connectToHost(QStringLiteral("localhost"), 22437);
     if (!socket.waitForConnected(3000)) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        QString err = QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString());
+        logError(QStringLiteral("loadChartData: %1").arg(socket.errorString()));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
 
     socket.write(QStringLiteral("mode json\n").toUtf8());
     QByteArray ack = readResponse(socket, 3000);
     if (ack.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Connected but no response from localhost:22437."));
+        QString err = QStringLiteral("Connected but no response from localhost:22437.");
+        logError(QStringLiteral("loadChartData: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
 
@@ -658,19 +728,22 @@ void MainWindow::loadChartData()
     socket.disconnectFromHost();
 
     if (response.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Connected but no chart list from localhost:22437."));
+        QString err = QStringLiteral("Connected but no chart list from localhost:22437.");
+        logError(QStringLiteral("loadChartData: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
 
     QJsonDocument doc = QJsonDocument::fromJson(response);
     if (doc.isNull() || !doc.isObject()) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        QString err = QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response));
+        logError(QStringLiteral("loadChartData: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
 
     QJsonArray charts = doc.object().value(QStringLiteral("charts")).toArray();
+    logDebug(QStringLiteral("loadChartData: received %1 charts from server").arg(charts.size()));
     if (charts.isEmpty()) {
         QMessageBox::information(this, QStringLiteral("Load Chart Data"),
             QStringLiteral("No charts found in the database."));
@@ -700,20 +773,26 @@ void MainWindow::loadChartData()
     lay->addLayout(btnLay);
     connect(okBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
     connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return;
+    if (dialog.exec() != QDialog::Accepted) {
+        logDebug(QStringLiteral("loadChartData: user cancelled chart selection"));
+        return;
+    }
 
     QListWidgetItem *selected = list->currentItem();
     if (!selected) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data"),
-            QStringLiteral("No chart selected."));
+        QString err = QStringLiteral("No chart selected.");
+        logError(QStringLiteral("loadChartData: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data"), err);
         return;
     }
     qint64 chartId = chartIdByName.value(selected->text(), -1);
     if (chartId <= 0) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Could not determine chart ID."));
+        QString err = QStringLiteral("Could not determine chart ID.");
+        logError(QStringLiteral("loadChartData: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
+    logDebug(QStringLiteral("loadChartData: selected chart id=%1 name=%2").arg(chartId).arg(selected->text()));
 
     // Step 3: clear the demo data from the GUI chart currently showing.
     m_raw = TelemetryData();
@@ -727,8 +806,9 @@ void MainWindow::loadChartData()
     // Step 4: connect again, set maxrows -1, mode json, list chartdata <id>.
     socket.connectToHost(QStringLiteral("localhost"), 22437);
     if (!socket.waitForConnected(3000)) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        QString err = QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString());
+        logError(QStringLiteral("loadChartData: %1").arg(socket.errorString()));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
 
@@ -738,25 +818,31 @@ void MainWindow::loadChartData()
     readResponse(socket, 3000);
 
     QString cmd = QStringLiteral("list chartdata %1\n").arg(chartId);
+    logDebug(QStringLiteral("loadChartData: sending command: %1").arg(cmd.trimmed()));
     socket.write(cmd.toUtf8());
     QByteArray dataResp = readResponse(socket, 30000); // larger timeout for chart data
     socket.disconnectFromHost();
 
     if (dataResp.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Connected but no chart data from localhost:22437."));
+        QString err = QStringLiteral("Connected but no chart data from localhost:22437.");
+        logError(QStringLiteral("loadChartData: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
 
+    logDebug(QStringLiteral("loadChartData: raw response (first 200 chars): %1").arg(QString::fromUtf8(dataResp).left(200).trimmed()));
+
     QJsonDocument dataDoc = QJsonDocument::fromJson(dataResp);
     if (dataDoc.isNull() || !dataDoc.isObject()) {
-        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
-            QStringLiteral("Invalid JSON chart data: %1").arg(QString::fromUtf8(dataResp)));
+        QString err = QStringLiteral("Invalid JSON chart data: %1").arg(QString::fromUtf8(dataResp));
+        logError(QStringLiteral("loadChartData: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
 
     QJsonObject dataObj = dataDoc.object();
     QJsonArray points = dataObj.value(QStringLiteral("points")).toArray();
+    logDebug(QStringLiteral("loadChartData: received %1 points for chart %2").arg(points.size()).arg(chartId));
 
     // Step 5: build plot data, converting unix timestamps to the user's local time zone.
     QVector<double> x, y;
@@ -796,6 +882,7 @@ void MainWindow::loadChartData()
 
     statusBar()->showMessage(
         QStringLiteral("Loaded chart %1: %2 points").arg(chartId).arg(points.size()));
+    logDebug(QStringLiteral("loadChartData: successfully plotted chart %1 with %2 points").arg(chartId).arg(points.size()));
 }
 
 // Remove the console prompt prefix/suffix from a server response.

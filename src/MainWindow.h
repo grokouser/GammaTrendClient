@@ -2,6 +2,9 @@
 #include <QMainWindow>
 #include "Telemetry.h"
 #include <QTcpSocket>
+#include <QFile>
+#include <QTextStream>
+#include <QDateTime>
 
 class QCustomPlot;
 class QCPGraph;
