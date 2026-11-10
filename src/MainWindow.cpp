@@ -108,6 +108,9 @@ void MainWindow::buildUi()
     m_showChartsBtn = new QPushButton(QStringLiteral("Show Charts"));
     ctrl->addWidget(m_showChartsBtn, 0, 9);
 
+    m_loadChartDataBtn = new QPushButton(QStringLiteral("Load Chart Data"));
+    ctrl->addWidget(m_loadChartDataBtn, 0, 10);
+
     ctrl->addWidget(new QLabel(QStringLiteral("Interval bin:")), 1, 0);
     m_binCombo = new QComboBox;
     m_binCombo->addItems({QStringLiteral("1 min (raw)"), QStringLiteral("5 min"),
@@ -206,6 +209,7 @@ void MainWindow::buildUi()
     connect(m_showDetectorsBtn, &QPushButton::clicked, this, &MainWindow::showDetectors);
     connect(m_showLocationsBtn, &QPushButton::clicked, this, &MainWindow::showLocations);
     connect(m_showChartsBtn, &QPushButton::clicked, this, &MainWindow::showCharts);
+    connect(m_loadChartDataBtn, &QPushButton::clicked, this, &MainWindow::loadChartData);
     connect(btn24h, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 1);   });
     connect(btn7d,  &QPushButton::clicked, this, [this]{ showLast(86400.0 * 7);   });
     connect(btn30d, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 30);  });
@@ -628,6 +632,170 @@ void MainWindow::showCharts()
     lay->addWidget(closeBtn, 0, Qt::AlignRight);
     connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
     dialog.exec();
+}
+
+void MainWindow::loadChartData()
+{
+    // Step 1: connect to server and get the JSON list of charts.
+    QTcpSocket socket;
+    socket.connectToHost(QStringLiteral("localhost"), 22437);
+    if (!socket.waitForConnected(3000)) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        return;
+    }
+
+    socket.write(QStringLiteral("mode json\n").toUtf8());
+    QByteArray ack = readResponse(socket, 3000);
+    if (ack.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Connected but no response from localhost:22437."));
+        return;
+    }
+
+    socket.write(QStringLiteral("list charts\n").toUtf8());
+    QByteArray response = readResponse(socket, 3000);
+    socket.disconnectFromHost();
+
+    if (response.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Connected but no chart list from localhost:22437."));
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(response);
+    if (doc.isNull() || !doc.isObject()) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Invalid JSON response: %1").arg(QString::fromUtf8(response)));
+        return;
+    }
+
+    QJsonArray charts = doc.object().value(QStringLiteral("charts")).toArray();
+    if (charts.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Load Chart Data"),
+            QStringLiteral("No charts found in the database."));
+        return;
+    }
+
+    // Step 2: show a dialog with all available charts for the user to pick.
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Select Chart"));
+    QVBoxLayout *lay = new QVBoxLayout(&dialog);
+    QListWidget *list = new QListWidget(&dialog);
+    QHash<QString, qint64> chartIdByName;
+    for (const QJsonValue &v : charts) {
+        QJsonObject obj = v.toObject();
+        QString name = obj.value(QStringLiteral("name")).toString();
+        qint64 id = obj.value(QStringLiteral("id")).toVariant().toLongLong();
+        list->addItem(name);
+        chartIdByName.insert(name, id);
+    }
+    lay->addWidget(list);
+    QPushButton *okBtn = new QPushButton(QStringLiteral("Load"), &dialog);
+    QPushButton *cancelBtn = new QPushButton(QStringLiteral("Cancel"), &dialog);
+    QHBoxLayout *btnLay = new QHBoxLayout;
+    btnLay->addStretch();
+    btnLay->addWidget(okBtn);
+    btnLay->addWidget(cancelBtn);
+    lay->addLayout(btnLay);
+    connect(okBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    QListWidgetItem *selected = list->currentItem();
+    if (!selected) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data"),
+            QStringLiteral("No chart selected."));
+        return;
+    }
+    qint64 chartId = chartIdByName.value(selected->text(), -1);
+    if (chartId <= 0) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Could not determine chart ID."));
+        return;
+    }
+
+    // Step 3: clear the demo data from the GUI chart currently showing.
+    m_raw = TelemetryData();
+    m_plot->clearGraphs();
+    m_navigator->clearGraphs();
+    m_daily->clearPlottables();
+    m_plot->replot();
+    m_navigator->replot();
+    m_daily->replot();
+
+    // Step 4: connect again, set maxrows -1, mode json, list chartdata <id>.
+    socket.connectToHost(QStringLiteral("localhost"), 22437);
+    if (!socket.waitForConnected(3000)) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Could not connect to localhost:22437.\n%1").arg(socket.errorString()));
+        return;
+    }
+
+    socket.write(QStringLiteral("maxrows -1\n").toUtf8());
+    readResponse(socket, 3000);
+    socket.write(QStringLiteral("mode json\n").toUtf8());
+    readResponse(socket, 3000);
+
+    QString cmd = QStringLiteral("list chartdata %1\n").arg(chartId);
+    socket.write(cmd.toUtf8());
+    QByteArray dataResp = readResponse(socket, 30000); // larger timeout for chart data
+    socket.disconnectFromHost();
+
+    if (dataResp.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Connected but no chart data from localhost:22437."));
+        return;
+    }
+
+    QJsonDocument dataDoc = QJsonDocument::fromJson(dataResp);
+    if (dataDoc.isNull() || !dataDoc.isObject()) {
+        QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"),
+            QStringLiteral("Invalid JSON chart data: %1").arg(QString::fromUtf8(dataResp)));
+        return;
+    }
+
+    QJsonObject dataObj = dataDoc.object();
+    QJsonArray points = dataObj.value(QStringLiteral("points")).toArray();
+
+    // Step 5: build plot data, converting unix timestamps to the user's local time zone.
+    QVector<double> x, y;
+    x.reserve(points.size());
+    y.reserve(points.size());
+
+    for (const QJsonValue &v : points) {
+        QJsonObject pt = v.toObject();
+        qint64 unixSec = pt.value(QStringLiteral("point_time")).toVariant().toLongLong();
+        double netCounts = pt.value(QStringLiteral("net_counts")).toDouble();
+
+        // QDateTime::fromSecsSinceEpoch interprets as UTC; toLocalTime() converts
+        // to the user's (GUI process) time zone, then back to epoch seconds so
+        // QCustomPlot's date-time ticker shows local wall-clock time.
+        QDateTime utc = QDateTime::fromSecsSinceEpoch(unixSec, Qt::UTC);
+        QDateTime local = utc.toLocalTime();
+        x.append(local.toSecsSinceEpoch());
+        y.append(netCounts);
+    }
+
+    // Step 6: create a chart in the GUI using the data.
+    m_plot->addGraph();
+    m_plot->graph()->setName(QStringLiteral("Chart %1 Net Counts").arg(chartId));
+    m_plot->graph()->setPen(QPen(QColor(0, 100, 200), 1.2));
+    m_plot->graph()->setData(x, y, true);
+
+    QCPAxisTickerDateTime *tick = new QCPAxisTickerDateTime;
+    tick->setDateTimeFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    tick->setTickCount(8);
+    m_plot->xAxis->setTicker(QSharedPointer<QCPAxisTickerDateTime>(tick));
+    m_plot->xAxis->setLabel(QStringLiteral("Date / time (local)"));
+    m_plot->yAxis->setLabel(QStringLiteral("Net Counts"));
+    m_plot->legend->setVisible(true);
+    m_plot->yAxis->rescale(true);
+    m_plot->xAxis->rescale(true);
+    m_plot->replot();
+
+    statusBar()->showMessage(
+        QStringLiteral("Loaded chart %1: %2 points").arg(chartId).arg(points.size()));
 }
 
 QByteArray MainWindow::readResponse(QTcpSocket &socket, int timeoutMs)

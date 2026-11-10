@@ -39,6 +39,7 @@ private slots:
     void showDetectors();
     void showLocations();
     void showCharts();
+    void loadChartData();
 
 private:
     void buildUi();
@@ -70,6 +71,7 @@ private:
     QPushButton *m_showDetectorsBtn = nullptr;
     QPushButton *m_showLocationsBtn = nullptr;
     QPushButton *m_showChartsBtn = nullptr;
+    QPushButton *m_loadChartDataBtn = nullptr;
 
     // navigator selection items
     QCPItemRect  *m_navRect = nullptr;
