@@ -123,7 +123,14 @@ static void binMean(const QVector<double> &key, const QVector<double> &v,
 // ---------------------------------------------------------------------------
 std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
 {
-    std::string url = m_baseUrl + path;
+    // Always request JSON output mode explicitly (server requires ?mode=).
+    std::string fullPath = path;
+    if (fullPath.find('?') == std::string::npos) {
+        fullPath += "?mode=json";
+    } else {
+        fullPath += "&mode=json";
+    }
+    std::string url = m_baseUrl + fullPath;
     logDebug(QStringLiteral("httpGet: %1").arg(QString::fromStdString(url)));
 
     httplib::Result res;
@@ -131,7 +138,7 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
         httplib::Client cli(url);
         cli.set_connection_timeout(timeoutSec);
         cli.set_read_timeout(timeoutSec);
-        res = cli.Get(path.c_str());
+        res = cli.Get(fullPath.c_str());
     }
 
     if (!res) {
