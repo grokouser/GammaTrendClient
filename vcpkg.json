@@ -1,14 +1,21 @@
 {
-  "name": "gt-api-test",
+  "name": "gammatrendclient",
   "version-string": "0.1.0",
   "dependencies": [
     {
       "name": "qtbase",
-      "default-features": false,
       "features": [
-        "gui", "widgets", "network", "concurrent", "thread",
-        "async-io", "doubleconversion", "freetype", "harfbuzz",
-        "pcre2", "png"
+        "gui",
+        "widgets",
+        "network",
+        "concurrent",
+        "thread",
+        "async-io",
+        "doubleconversion",
+        "freetype",
+        "harfbuzz",
+        "pcre2",
+        "png"
       ]
     },
     "qcustomplot"
