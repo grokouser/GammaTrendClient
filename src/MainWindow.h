@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QSettings>
 
 class QCustomPlot;
 class QCPGraph;
@@ -18,6 +19,7 @@ class QPushButton;
 class QLabel;
 class QDialog;
 class QListWidget;
+class QLineEdit;
 
 class MainWindow : public QMainWindow
 {
@@ -43,6 +45,9 @@ private slots:
     void showLocations();
     void showCharts();
     void loadChartData();
+    void createChart();
+    void deleteChart();
+    void saveUrl();
 
 private:
     void buildUi();
@@ -60,8 +65,8 @@ private:
     int m_binSec = 300;          // current display bin (seconds)
     int m_smoothMin = 0;         // moving-average window (minutes, 0 = off)
 
-    // base URL for the server HTTP API (http://localhost:22438 or https://api.h3drms.com)
-    std::string m_baseUrl = "http://localhost:22438";
+    // base URL for the server HTTP API (e.g. https://rms.h3dgamma.com/api or http://localhost:22438/api)
+    std::string m_baseUrl = "https://rms.h3dgamma.com/api";
 
     // widgets
     QCustomPlot *m_plot = nullptr;      // main telemetry plot
@@ -79,6 +84,10 @@ private:
     QPushButton *m_showLocationsBtn = nullptr;
     QPushButton *m_showChartsBtn = nullptr;
     QPushButton *m_loadChartDataBtn = nullptr;
+    QPushButton *m_createChartBtn = nullptr;
+    QPushButton *m_deleteChartBtn = nullptr;
+    QLineEdit   *m_urlEdit = nullptr;
+    QPushButton *m_saveUrlBtn = nullptr;
 
     // navigator selection items
     QCPItemRect  *m_navRect = nullptr;

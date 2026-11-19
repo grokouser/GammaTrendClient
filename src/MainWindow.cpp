@@ -25,6 +25,8 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QInputDialog>
+#include <QLineEdit>
+#include <QSettings>
 #include <cmath>
 
 // ---------------------------------------------------------------------------
@@ -125,17 +127,36 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
 {
     // Always request JSON output mode explicitly (server requires ?mode=).
     std::string fullPath = path;
+    // Strip leading slash if present — m_baseUrl already includes the path prefix (e.g. /api)
+    if (!fullPath.empty() && fullPath[0] == '/') {
+        fullPath.erase(0, 1);
+    }
+    // Build the full request path with mode=json query parameter
     if (fullPath.find('?') == std::string::npos) {
         fullPath += "?mode=json";
     } else {
         fullPath += "&mode=json";
     }
-    std::string url = m_baseUrl + fullPath;
-    logDebug(QStringLiteral("httpGet: %1").arg(QString::fromStdString(url)));
+
+    // Construct the base URL (scheme + host + port, no path) from m_baseUrl
+    // m_baseUrl may include a path prefix (e.g. https://rms.h3dgamma.com/api).
+    std::string baseUrl = m_baseUrl;
+    size_t pathStart = baseUrl.find('/', 8); // find first '/' after scheme://
+    if (pathStart != std::string::npos) {
+        baseUrl = baseUrl.substr(0, pathStart);
+    }
+
+    // Full URL for logging only
+    std::string fullUrl = m_baseUrl;
+    if (!fullUrl.empty() && fullUrl.back() != '/') {
+        fullUrl += "/";
+    }
+    fullUrl += fullPath;
+    logDebug(QStringLiteral("httpGet: %1").arg(QString::fromStdString(fullUrl)));
 
     httplib::Result res;
     {
-        httplib::Client cli(url);
+        httplib::Client cli(baseUrl);
         cli.set_connection_timeout(timeoutSec);
         cli.set_read_timeout(timeoutSec);
         res = cli.Get(fullPath.c_str());
@@ -160,6 +181,10 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
+    // Load persisted server URL from QSettings (falls back to default).
+    QSettings settings("H3D", "GammaTrendClient");
+    m_baseUrl = settings.value("serverUrl", QStringLiteral("https://rms.h3dgamma.com/api")).toString().toStdString();
+
     buildUi();
     writeLogBanner();
 }
@@ -198,6 +223,12 @@ void MainWindow::buildUi()
     m_loadChartDataBtn = new QPushButton(QStringLiteral("Load Chart Data"));
     ctrl->addWidget(m_loadChartDataBtn, 0, 10);
 
+    m_createChartBtn = new QPushButton(QStringLiteral("Create Chart"));
+    ctrl->addWidget(m_createChartBtn, 0, 11);
+
+    m_deleteChartBtn = new QPushButton(QStringLiteral("Delete Chart"));
+    ctrl->addWidget(m_deleteChartBtn, 0, 12);
+
     ctrl->addWidget(new QLabel(QStringLiteral("Interval bin:")), 1, 0);
     m_binCombo = new QComboBox;
     m_binCombo->addItems({QStringLiteral("1 min (raw)"), QStringLiteral("5 min"),
@@ -212,6 +243,14 @@ void MainWindow::buildUi()
     m_smoothSlider->setRange(0, 240);
     m_smoothSlider->setSingleStep(5);
     ctrl->addWidget(m_smoothSlider, 2, 2, 1, 4);
+
+    m_urlEdit = new QLineEdit(QString::fromStdString(m_baseUrl));
+    m_urlEdit->setPlaceholderText(QStringLiteral("https://rms.h3dgamma.com/api"));
+    m_urlEdit->setMinimumWidth(300);
+    ctrl->addWidget(new QLabel(QStringLiteral("Server URL:")), 4, 0);
+    ctrl->addWidget(m_urlEdit, 4, 1, 1, 6);
+    m_saveUrlBtn = new QPushButton(QStringLiteral("Save URL"));
+    ctrl->addWidget(m_saveUrlBtn, 4, 7);
 
     m_cbRequests = new QCheckBox(QStringLiteral("Requests")); m_cbRequests->setChecked(true);
     m_cbErrors   = new QCheckBox(QStringLiteral("Errors"));   m_cbErrors->setChecked(true);
@@ -298,6 +337,9 @@ void MainWindow::buildUi()
     connect(m_showLocationsBtn, &QPushButton::clicked, this, &MainWindow::showLocations);
     connect(m_showChartsBtn, &QPushButton::clicked, this, &MainWindow::showCharts);
     connect(m_loadChartDataBtn, &QPushButton::clicked, this, &MainWindow::loadChartData);
+    connect(m_createChartBtn, &QPushButton::clicked, this, &MainWindow::createChart);
+    connect(m_deleteChartBtn, &QPushButton::clicked, this, &MainWindow::deleteChart);
+    connect(m_saveUrlBtn, &QPushButton::clicked, this, &MainWindow::saveUrl);
     connect(btn24h, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 1);   });
     connect(btn7d,  &QPushButton::clicked, this, [this]{ showLast(86400.0 * 7);   });
     connect(btn30d, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 30);  });
@@ -525,7 +567,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *ev)
 void MainWindow::testConnection()
 {
     logDebug(QStringLiteral("testConnection: GET http://localhost:22438/detectors"));
-    std::string body = httpGet("/detectors", 5);
+    std::string body = httpGet("detectors", 5);
     if (body.empty()) {
         QString err = QStringLiteral("Could not reach the HTTP API at %1.\nCheck that the server is running on port 22438.")
             .arg(QString::fromStdString(m_baseUrl));
@@ -541,7 +583,7 @@ void MainWindow::testConnection()
 void MainWindow::showDetectors()
 {
     logDebug(QStringLiteral("showDetectors: GET /detectors"));
-    std::string body = httpGet("/detectors", 10);
+    std::string body = httpGet("detectors", 10);
     if (body.empty()) {
         QString err = QStringLiteral("Could not reach the HTTP API at %1.")
             .arg(QString::fromStdString(m_baseUrl));
@@ -581,7 +623,7 @@ void MainWindow::showDetectors()
 void MainWindow::showLocations()
 {
     logDebug(QStringLiteral("showLocations: GET /locations"));
-    std::string body = httpGet("/locations", 10);
+    std::string body = httpGet("locations", 10);
     if (body.empty()) {
         QString err = QStringLiteral("Could not reach the HTTP API at %1.")
             .arg(QString::fromStdString(m_baseUrl));
@@ -621,7 +663,7 @@ void MainWindow::showLocations()
 void MainWindow::showCharts()
 {
     logDebug(QStringLiteral("showCharts: GET /charts"));
-    std::string body = httpGet("/charts", 10);
+    std::string body = httpGet("charts", 10);
     if (body.empty()) {
         QString err = QStringLiteral("Could not reach the HTTP API at %1.")
             .arg(QString::fromStdString(m_baseUrl));
@@ -662,7 +704,7 @@ void MainWindow::loadChartData()
 {
     // Step 1: get the JSON list of charts.
     logDebug(QStringLiteral("loadChartData: GET /charts"));
-    std::string body = httpGet("/charts", 10);
+    std::string body = httpGet("charts", 10);
     if (body.empty()) {
         QString err = QStringLiteral("Could not reach the HTTP API at %1.")
             .arg(QString::fromStdString(m_baseUrl));
@@ -752,7 +794,7 @@ void MainWindow::loadChartData()
     m_daily->replot();
 
     // Step 4: GET /chartdata?id=<id>&maxrows=<N>
-    QString path = QStringLiteral("/chartdata?id=%1&maxrows=%2").arg(chartId).arg(maxRows);
+    QString path = QStringLiteral("chartdata?id=%1&maxrows=%2").arg(chartId).arg(maxRows);
     logDebug(QStringLiteral("loadChartData: GET %1").arg(path));
     std::string dataResp = httpGet(path.toStdString(), 30);
     if (dataResp.empty()) {
@@ -852,4 +894,114 @@ void MainWindow::exportPng()
         statusBar()->showMessage(QStringLiteral("Saved %1").arg(fn));
     else
         QMessageBox::warning(this, QStringLiteral("Export failed"), QStringLiteral("Could not write %1").arg(fn));
+}
+
+void MainWindow::createChart()
+{
+    // Ask the user for chart type and parameters.
+    QStringList types;
+    types << QStringLiteral("Detector") << QStringLiteral("Location");
+    bool ok = false;
+    QString type = QInputDialog::getItem(this, QStringLiteral("Create Chart"),
+        QStringLiteral("Chart type:"), types, 0, false, &ok);
+    if (!ok) return;
+
+    QString name = QInputDialog::getText(this, QStringLiteral("Create Chart"),
+        QStringLiteral("Chart name:"), QLineEdit::Normal, QString(), &ok);
+    if (!ok || name.isEmpty()) return;
+
+    int id = QInputDialog::getInt(this, QStringLiteral("Create Chart"),
+        QStringLiteral("%1 ID:").arg(type), 1, 1, 1000000, 1, &ok);
+    if (!ok) return;
+
+    int libraryId = QInputDialog::getInt(this, QStringLiteral("Create Chart"),
+        QStringLiteral("Library ID:"), 0, 0, 1000000, 1, &ok);
+    if (!ok) return;
+
+    QString path;
+    if (type == QStringLiteral("Detector")) {
+        path = QStringLiteral("chart/create/detector?name=%1&detectorID=%2&libraryID=%3")
+            .arg(name).arg(id).arg(libraryId);
+    } else {
+        path = QStringLiteral("chart/create/location?name=%1&locationID=%2&libraryID=%3")
+            .arg(name).arg(id).arg(libraryId);
+    }
+
+    logDebug(QStringLiteral("createChart: GET %1").arg(path));
+    std::string body = httpGet(path.toStdString(), 10);
+    if (body.empty()) {
+        QString err = QStringLiteral("Could not reach the HTTP API at %1.").arg(QString::fromStdString(m_baseUrl));
+        logError(QStringLiteral("createChart: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Create Chart failed"), err);
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(body).toUtf8());
+    QString msg;
+    if (!doc.isNull() && doc.isObject()) {
+        QString error = doc.object().value(QStringLiteral("error")).toString();
+        if (!error.isEmpty()) {
+            msg = QStringLiteral("Server error: %1").arg(error);
+        } else {
+            msg = QStringLiteral("Chart created successfully.\n%1").arg(QString::fromStdString(body));
+        }
+    } else {
+        msg = QStringLiteral("Chart created.\n%1").arg(QString::fromStdString(body));
+    }
+
+    QMessageBox::information(this, QStringLiteral("Create Chart"), msg);
+
+    // Refresh the chart list so the new chart shows up.
+    showCharts();
+}
+
+void MainWindow::deleteChart()
+{
+    bool ok = false;
+    qint64 chartId = QInputDialog::getInt(this, QStringLiteral("Delete Chart"),
+        QStringLiteral("Chart ID:"), 1, 1, 1000000, 1, &ok);
+    if (!ok) return;
+
+    QString path = QStringLiteral("chart/delete?id=%1").arg(chartId);
+    logDebug(QStringLiteral("deleteChart: GET %1").arg(path));
+    std::string body = httpGet(path.toStdString(), 10);
+    if (body.empty()) {
+        QString err = QStringLiteral("Could not reach the HTTP API at %1.").arg(QString::fromStdString(m_baseUrl));
+        logError(QStringLiteral("deleteChart: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Delete Chart failed"), err);
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(body).toUtf8());
+    QString msg;
+    if (!doc.isNull() && doc.isObject()) {
+        QString error = doc.object().value(QStringLiteral("error")).toString();
+        if (!error.isEmpty()) {
+            msg = QStringLiteral("Server error: %1").arg(error);
+        } else {
+            msg = QStringLiteral("Chart deleted successfully.\n%1").arg(QString::fromStdString(body));
+        }
+    } else {
+        msg = QStringLiteral("Chart deleted.\n%1").arg(QString::fromStdString(body));
+    }
+
+    QMessageBox::information(this, QStringLiteral("Delete Chart"), msg);
+
+    // Refresh the chart list.
+    showCharts();
+}
+
+void MainWindow::saveUrl()
+{
+    QString url = m_urlEdit->text().trimmed();
+    if (url.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Save URL"), QStringLiteral("URL cannot be empty."));
+        return;
+    }
+    QSettings settings("H3D", "GammaTrendClient");
+    settings.setValue("serverUrl", url);
+    m_baseUrl = url.toStdString();
+    logDebug(QStringLiteral("saveUrl: server URL set to %1").arg(url));
+    QMessageBox::information(this, QStringLiteral("URL Saved"),
+        QStringLiteral("Server URL saved: %1\nThis will be used on next launch.").arg(url));
 }
