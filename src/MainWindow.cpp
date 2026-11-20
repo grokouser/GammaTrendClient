@@ -165,14 +165,14 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
     if (!res) {
         logError(QStringLiteral("httpGet: request failed (%1) for %2")
             .arg(httplib::to_string(res.error()))
-            .arg(QString::fromStdString(url)));
+            .arg(QString::fromStdString(fullUrl)));
         return "";
     }
 
     if (res->status != 200) {
         logError(QStringLiteral("httpGet: HTTP %1 for %2")
             .arg(res->status)
-            .arg(QString::fromStdString(url)));
+            .arg(QString::fromStdString(fullUrl)));
         return "";
     }
 
