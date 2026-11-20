@@ -26,6 +26,7 @@
 #include <QJsonValue>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QTextEdit>
 #include <QSettings>
 #include <cmath>
 
@@ -179,6 +180,59 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
     return res->body;
 }
 
+// -------
+// HTTP PUT helper. Sends license text as request body.
+// -------
+std::string MainWindow::httpPut(const std::string &path, const std::string &body, int timeoutSec)
+{
+    std::string fullPath = path;
+    if (!fullPath.empty() && fullPath[0] == '/') {
+        fullPath.erase(0, 1);
+    }
+    if (fullPath.find('?') == std::string::npos) {
+        fullPath += "?mode=html";
+    } else {
+        fullPath += "&mode=html";
+    }
+
+    std::string baseUrl = m_baseUrl;
+    size_t pathStart = baseUrl.find('/', 8);
+    if (pathStart != std::string::npos) {
+        baseUrl = baseUrl.substr(0, pathStart);
+    }
+
+    std::string fullUrl = m_baseUrl;
+    if (!fullUrl.empty() && fullUrl.back() != '/') {
+        fullUrl += "/";
+    }
+    fullUrl += fullPath;
+    logDebug(QStringLiteral("httpPut: %1").arg(QString::fromStdString(fullUrl)));
+
+    httplib::Result res;
+    {
+        httplib::Client cli(baseUrl);
+        cli.set_connection_timeout(timeoutSec);
+        cli.set_read_timeout(timeoutSec);
+        res = cli.Put(fullPath.c_str(), body, "text/plain");
+    }
+
+    if (!res) {
+        logError(QStringLiteral("httpPut: request failed (%1) for %2")
+            .arg(httplib::to_string(res.error()))
+            .arg(QString::fromStdString(fullUrl)));
+        return "";
+    }
+
+    if (res->status != 200) {
+        logError(QStringLiteral("httpPut: HTTP %1 for %2")
+            .arg(res->status)
+            .arg(QString::fromStdString(fullUrl)));
+        return "";
+    }
+
+    return res->body;
+}
+
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     // Load persisted server URL from QSettings (falls back to default).
@@ -228,6 +282,15 @@ void MainWindow::buildUi()
 
     m_deleteChartBtn = new QPushButton(QStringLiteral("Delete Chart"));
     ctrl->addWidget(m_deleteChartBtn, 0, 12);
+
+    m_showLicensesBtn = new QPushButton(QStringLiteral("Show Licenses"));
+    ctrl->addWidget(m_showLicensesBtn, 0, 13);
+
+    m_createLicenseBtn = new QPushButton(QStringLiteral("Create License"));
+    ctrl->addWidget(m_createLicenseBtn, 0, 14);
+
+    m_deleteLicenseBtn = new QPushButton(QStringLiteral("Delete License"));
+    ctrl->addWidget(m_deleteLicenseBtn, 0, 15);
 
     ctrl->addWidget(new QLabel(QStringLiteral("Interval bin:")), 1, 0);
     m_binCombo = new QComboBox;
@@ -339,6 +402,9 @@ void MainWindow::buildUi()
     connect(m_loadChartDataBtn, &QPushButton::clicked, this, &MainWindow::loadChartData);
     connect(m_createChartBtn, &QPushButton::clicked, this, &MainWindow::createChart);
     connect(m_deleteChartBtn, &QPushButton::clicked, this, &MainWindow::deleteChart);
+    connect(m_showLicensesBtn, &QPushButton::clicked, this, &MainWindow::showLicenses);
+    connect(m_createLicenseBtn, &QPushButton::clicked, this, &MainWindow::createLicense);
+    connect(m_deleteLicenseBtn, &QPushButton::clicked, this, &MainWindow::deleteLicense);
     connect(m_saveUrlBtn, &QPushButton::clicked, this, &MainWindow::saveUrl);
     connect(btn24h, &QPushButton::clicked, this, [this]{ showLast(86400.0 * 1);   });
     connect(btn7d,  &QPushButton::clicked, this, [this]{ showLast(86400.0 * 7);   });
@@ -562,6 +628,166 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *ev)
     default: break;
     }
     return QMainWindow::eventFilter(obj, ev);
+}
+
+void MainWindow::showLicenses()
+{
+    logDebug(QStringLiteral("showLicenses: GET /licenses"));
+    std::string body = httpGet("licenses", 10);
+    if (body.empty()) {
+        QString err = QStringLiteral("Could not reach the HTTP API at %1.")
+            .arg(QString::fromStdString(m_baseUrl));
+        logError(QStringLiteral("showLicenses: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Licenses failed"), err);
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(body).toUtf8());
+    if (doc.isNull() || !doc.isObject()) {
+        QString err = QStringLiteral("Invalid JSON response: %1").arg(QString::fromStdString(body));
+        logError(QStringLiteral("showLicenses: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Show Licenses failed"), err);
+        return;
+    }
+
+    QJsonArray licenses = doc.object().value(QStringLiteral("licenses")).toArray();
+    QStringList items;
+    for (const QJsonValue &v : licenses) {
+        QJsonObject obj = v.toObject();
+        qint64 id = obj.value(QStringLiteral("id")).toVariant().toLongLong();
+        QString content = obj.value(QStringLiteral("content")).toString();
+        QString preview = content;
+        if (preview.length() > 80) preview = preview.left(80) + QStringLiteral("...");
+        items << QStringLiteral("ID %1: %2").arg(id).arg(preview);
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Licenses"));
+    QVBoxLayout *lay = new QVBoxLayout(&dialog);
+    QListWidget *list = new QListWidget(&dialog);
+    if (items.isEmpty())
+        list->addItem(QStringLiteral("(no licenses in database)"));
+    else
+        list->addItems(items);
+    lay->addWidget(list);
+    QPushButton *closeBtn = new QPushButton(QStringLiteral("Close"), &dialog);
+    lay->addWidget(closeBtn, 0, Qt::AlignRight);
+    connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    dialog.exec();
+}
+
+void MainWindow::createLicense()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Create License"));
+    QVBoxLayout *lay = new QVBoxLayout(&dialog);
+
+    lay->addWidget(new QLabel(QStringLiteral("Paste the license text below:"), &dialog));
+    QTextEdit *textEdit = new QTextEdit(&dialog);
+    textEdit->setMinimumSize(600, 400);
+    lay->addWidget(textEdit);
+
+    QDialogButtonBox *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    lay->addWidget(buttons);
+
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        logDebug(QStringLiteral("createLicense: user cancelled"));
+        return;
+    }
+
+    QString content = textEdit->toPlainText().trimmed();
+    if (content.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Create License"),
+            QStringLiteral("License text cannot be empty."));
+        return;
+    }
+
+    logDebug(QStringLiteral("createLicense: PUT /license/create"));
+    std::string resp = httpPut("license/create", content.toStdString(), 15);
+    if (resp.empty()) {
+        QString err = QStringLiteral("Could not reach the HTTP API at %1.")
+            .arg(QString::fromStdString(m_baseUrl));
+        logError(QStringLiteral("createLicense: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Create License failed"), err);
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(resp).toUtf8());
+    QString msg;
+    if (!doc.isNull() && doc.isObject()) {
+        QString error = doc.object().value(QStringLiteral("error")).toString();
+        if (!error.isEmpty()) {
+            msg = QStringLiteral("Server error: %1").arg(error);
+        } else {
+            qint64 licId = doc.object().value(QStringLiteral("license_id")).toVariant().toLongLong();
+            msg = QStringLiteral("License created successfully (ID %1).").arg(licId);
+        }
+    } else {
+        msg = QStringLiteral("License created.\n%1").arg(QString::fromStdString(resp));
+    }
+
+    QMessageBox::information(this, QStringLiteral("Create License"), msg);
+}
+
+void MainWindow::deleteLicense()
+{
+    bool ok = false;
+    qint64 licenseId = QInputDialog::getInt(this, QStringLiteral("Delete License"),
+        QStringLiteral("License ID:"), 1, 1, 1000000, 1, &ok);
+    if (!ok) return;
+
+    QString path = QStringLiteral("license/delete?id=%1").arg(licenseId);
+    logDebug(QStringLiteral("deleteLicense: DELETE %1").arg(path));
+
+    std::string baseUrl = m_baseUrl;
+    size_t pathStart = baseUrl.find('/', 8);
+    if (pathStart != std::string::npos) {
+        baseUrl = baseUrl.substr(0, pathStart);
+    }
+    std::string fullPath = path.toStdString() + "&mode=html";
+
+    httplib::Result res;
+    {
+        httplib::Client cli(baseUrl);
+        cli.set_connection_timeout(10);
+        cli.set_read_timeout(10);
+        res = cli.Delete(fullPath.c_str());
+    }
+
+    if (!res) {
+        QString err = QStringLiteral("Request failed (%1).")
+            .arg(httplib::to_string(res.error()));
+        logError(QStringLiteral("deleteLicense: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Delete License failed"), err);
+        return;
+    }
+
+    if (res->status != 200) {
+        QString err = QStringLiteral("HTTP %1 from server.").arg(res->status);
+        logError(QStringLiteral("deleteLicense: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Delete License failed"), err);
+        return;
+    }
+
+    QString body = QString::fromStdString(res->body);
+    QJsonDocument doc = QJsonDocument::fromJson(body.toUtf8());
+    QString msg;
+    if (!doc.isNull() && doc.isObject()) {
+        QString error = doc.object().value(QStringLiteral("error")).toString();
+        if (!error.isEmpty()) {
+            msg = QStringLiteral("Server error: %1").arg(error);
+        } else {
+            msg = QStringLiteral("License deleted successfully.\n%1").arg(body);
+        }
+    } else {
+        msg = QStringLiteral("License deleted.\n%1").arg(body);
+    }
+
+    QMessageBox::information(this, QStringLiteral("Delete License"), msg);
 }
 
 void MainWindow::testConnection()

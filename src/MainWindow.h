@@ -47,6 +47,9 @@ private slots:
     void loadChartData();
     void createChart();
     void deleteChart();
+    void showLicenses();
+    void createLicense();
+    void deleteLicense();
     void saveUrl();
 
 private:
@@ -59,6 +62,7 @@ private:
     // HTTP client helper (port 22438, or https://api.h3drms.com)
     // Returns the response body, or empty on failure.
     std::string httpGet(const std::string &path, int timeoutSec = 10);
+    std::string httpPut(const std::string &path, const std::string &body, int timeoutSec = 10);
 
     // data
     TelemetryData m_raw;
@@ -86,6 +90,9 @@ private:
     QPushButton *m_loadChartDataBtn = nullptr;
     QPushButton *m_createChartBtn = nullptr;
     QPushButton *m_deleteChartBtn = nullptr;
+    QPushButton *m_showLicensesBtn = nullptr;
+    QPushButton *m_createLicenseBtn = nullptr;
+    QPushButton *m_deleteLicenseBtn = nullptr;
     QLineEdit   *m_urlEdit = nullptr;
     QPushButton *m_saveUrlBtn = nullptr;
 
