@@ -6,72 +6,100 @@ dual-Y-axis time plot, range navigator, daily rollup.
 ## Layout
 
 - Source: `GammaTrendClient/` (this repo)
-- Scripts: `scripts/` (build.bat for Windows, build.sh for Linux)
+- Scripts: `scripts/` (build.bat for Windows, build.sh for Linux, plus helpers)
 - Build output: `build/` (created by the build scripts)
-- vcpkg (Windows only): `vcpkg/` (created by build.bat, isolated to this project)
+- vcpkg (Windows only): `vcpkg/` (created by vcpkg_clean.bat, isolated to this project)
+
+## Scripts (scripts/)
+
+All build and run procedures are entry-pointed through `scripts/`. Do not run cmake or vcpkg by hand — use these scripts.
+
+| Script | Platform | Purpose |
+|--------|----------|---------|
+| `scripts\build.bat` | Windows | Build Release from scratch. Requires `vcpkg/` to be installed first (run `vcpkg_clean.bat` if missing). Output: `build\Release\gt_api_test.exe` |
+| `scripts\build.sh` | Linux (native) | Build Release from scratch. Installs Qt6 dev packages via apt, configures CMake, builds. **Refuses to run under WSL** — use `build.bat` from Windows instead. |
+| `scripts\vcpkg_clean.bat` | Windows | Remove and reinstall vcpkg from scratch. Run this once before `build.bat` if `vcpkg/` is missing or corrupt. |
+| `scripts\run_bat.sh` | Linux / WSL | Run a Windows `.bat` script through `cmd.exe` (e.g. invoke `build.bat` from WSL). Usage: `run_bat.sh /path/to/script.bat [args...]` |
+
+### How to use the scripts
+
+**Windows (recommended):**
+
+```cmd
+cd C:\Users\thurston\Dev\GammaTrendClient
+REM First time only — install vcpkg:
+scripts\vcpkg_clean.bat
+REM Then build (and re-use on subsequent runs):
+scripts\build.bat
+REM Run the executable:
+build\Release\gt_api_test.exe
+gt_api_test.exe --render out.png --selftest   # headless snapshot
+```
+
+**Linux (native, not WSL):**
+
+```bash
+cd ~/GammaTrendClient
+chmod +x scripts/build.sh
+./scripts/build.sh
+./build/gt_api_test
+./build/gt_api_test --render out.png --selftest   # headless snapshot
+```
+
+**WSL (Windows Subsystem for Linux):**
+
+Do not run `build.sh` inside WSL — it will exit with an error. Use the Windows script instead:
+
+```bash
+# From WSL, invoke the Windows build script via cmd.exe:
+./scripts/run_bat.sh /mnt/c/Users/thurston/Dev/GammaTrendClient/scripts/build.bat
+```
+
+Or run `build.bat` directly from a Windows Developer Command Prompt.
 
 ## Prerequisites
 
 ### Windows
 - Visual Studio 2022 (Community/Professional/Enterprise) with **Desktop development with C++** workload
 - Git for Windows
-- The build script downloads and bootstraps vcpkg automatically (no pre-installed vcpkg needed)
+- `scripts\vcpkg_clean.bat` downloads and bootstraps an isolated vcpkg into `GammaTrendClient/vcpkg/` automatically (no pre-installed vcpkg needed)
 
-### Linux
+### Linux (native)
 - CMake 3.24+
 - GCC or Clang (C++17)
-- Qt6 development packages: `qtbase6-dev`, `qttools6-dev-tools`, `libqt6widgets6`, etc.
+- Qt6 development packages: `qtbase6-dev`, `qttools6-dev-tools`, `libqt6widgets6`, etc. (installed automatically by `build.sh` via apt)
 - Git
 - Build essentials: `build-essential`, `ninja-build` (optional)
 
-## Build — Windows (recommended)
+## What the scripts do
 
-From a Developer Command Prompt for VS2022 (or any cmd/PowerShell):
-
-```cmd
-cd C:\Users\thurston\Dev\GammaTrendClient
-scripts\build.bat
-```
-
-What `build.bat` does (run once, from scratch):
-
+### build.bat (Windows)
 1. Verifies the working tree is clean
-2. Clones an isolated vcpkg into `GammaTrendClient/vcpkg/` (does **not** touch any other vcpkg on the machine)
-3. Bootstraps vcpkg and installs Qt6 + QCustomPlot (~45 min first run, cached after)
-4. Locates cmake.exe from Visual Studio 2022
+2. Requires `vcpkg/` to exist (run `vcpkg_clean.bat` first if not)
+3. Locates `cmake.exe` from Visual Studio 2022
+4. Removes any stale CMake cache
 5. Configures CMake (Visual Studio 17 2022, x64) with the vcpkg toolchain
-6. Builds Release → `build/Release/gt_api_test.exe`
+6. Builds Release → `build\Release\gt_api_test.exe`
 
 Subsequent runs reuse the installed vcpkg packages and are much faster.
 
-Run the executable:
+### build.sh (Linux native)
+1. Refuses to run under WSL
+2. Verifies the working tree is clean
+3. Installs Qt6 development packages via apt/dnf/pacman (if missing)
+4. Removes any stale CMake cache
+5. Configures CMake (Unix Makefiles, Release)
+6. Builds Release → `build/gt_api_test`
 
-```cmd
-build\Release\gt_api_test.exe
-gt_api_test.exe --render out.png --selftest   # headless snapshot
-```
+### vcpkg_clean.bat (Windows)
+1. Removes the existing `vcpkg/` directory
+2. Clones vcpkg from GitHub
+3. Bootstraps vcpkg (`bootstrap-vcpkg.bat`)
+4. Installs dependencies from `vcpkg.json` (`vcpkg install --triplet x64-windows`)
 
-## Build — Linux
-
-```bash
-cd ~/GammaTrendClient
-chmod +x scripts/build.sh
-./scripts/build.sh
-```
-
-What `build.sh` does:
-
-1. Verifies the working tree is clean
-2. Installs Qt6 development packages via apt (if missing)
-3. Configures CMake (Unix Makefiles / Ninja, Release)
-4. Builds → `build/gt_api_test`
-
-Run the executable:
-
-```bash
-./build/gt_api_test
-./build/gt_api_test --render out.png --selftest   # headless snapshot
-```
+### run_bat.sh (Linux / WSL)
+- Converts line endings and streams output from a Windows `.bat` file run via `cmd.exe`
+- Usage: `run_bat.sh <bat_path> [args...]`
 
 ## Features
 
@@ -92,3 +120,5 @@ Run the executable:
 - Never delete `vcpkg_installed/` or `CMakeCache.txt` mid-build; use the
   `scripts/build.bat` / `scripts/build.sh` entry points instead of running
   cmake by hand.
+- `build.sh` will not run under WSL. Use `build.bat` from Windows CMD, or
+  `run_bat.sh` from WSL to invoke it.
