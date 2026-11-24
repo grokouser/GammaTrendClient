@@ -141,9 +141,12 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
 
     // Construct the base URL (scheme + host + port, no path) from m_baseUrl
     // m_baseUrl may include a path prefix (e.g. https://rms.h3dgamma.com/api).
+    // Preserve the path prefix so requests go to the correct URL (e.g. /api/charts).
     std::string baseUrl = m_baseUrl;
     size_t pathStart = baseUrl.find('/', 8); // find first '/' after scheme://
+    std::string pathPrefix;
     if (pathStart != std::string::npos) {
+        pathPrefix = m_baseUrl.substr(pathStart);
         baseUrl = baseUrl.substr(0, pathStart);
     }
 
@@ -153,6 +156,8 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
         fullUrl += "/";
     }
     fullUrl += fullPath;
+    // Prepend the path prefix (e.g. /api) so the request reaches the correct endpoint
+    std::string requestPath = pathPrefix + "/" + fullPath;
     logDebug(QStringLiteral("httpGet: %1").arg(QString::fromStdString(fullUrl)));
 
     httplib::Result res;
@@ -160,20 +165,29 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
         httplib::Client cli(baseUrl);
         cli.set_connection_timeout(timeoutSec);
         cli.set_read_timeout(timeoutSec);
-        res = cli.Get(fullPath.c_str());
+        res = cli.Get(requestPath.c_str());
     }
 
     if (!res) {
-        logError(QStringLiteral("httpGet: request failed (%1) for %2")
-            .arg(httplib::to_string(res.error()))
+        auto err = res.error();
+        logError(QStringLiteral("httpGet: request failed (error=%1 (%2)) for %3")
+            .arg(httplib::to_string(err))
+            .arg(static_cast<int>(err))
             .arg(QString::fromStdString(fullUrl)));
+        logError(QStringLiteral("httpGet: baseUrl=%1 pathPrefix=%2 requestPath=%3")
+            .arg(QString::fromStdString(baseUrl))
+            .arg(QString::fromStdString(pathPrefix))
+            .arg(QString::fromStdString(requestPath)));
         return "";
     }
 
     if (res->status != 200) {
-        logError(QStringLiteral("httpGet: HTTP %1 for %2")
+        std::string bodyPreview = res->body;
+        if (bodyPreview.size() > 200) bodyPreview.resize(200);
+        logError(QStringLiteral("httpGet: HTTP %1 for %2 body=%3")
             .arg(res->status)
-            .arg(QString::fromStdString(fullUrl)));
+            .arg(QString::fromStdString(fullUrl))
+            .arg(QString::fromStdString(bodyPreview)));
         return "";
     }
 
@@ -197,7 +211,9 @@ std::string MainWindow::httpPut(const std::string &path, const std::string &body
 
     std::string baseUrl = m_baseUrl;
     size_t pathStart = baseUrl.find('/', 8);
+    std::string pathPrefix;
     if (pathStart != std::string::npos) {
+        pathPrefix = m_baseUrl.substr(pathStart);
         baseUrl = baseUrl.substr(0, pathStart);
     }
 
@@ -213,7 +229,9 @@ std::string MainWindow::httpPut(const std::string &path, const std::string &body
         httplib::Client cli(baseUrl);
         cli.set_connection_timeout(timeoutSec);
         cli.set_read_timeout(timeoutSec);
-        res = cli.Put(fullPath.c_str(), body, "text/plain");
+        // Prepend the path prefix (e.g. /api) so the request reaches the correct endpoint
+        std::string requestPath = pathPrefix + "/" + fullPath;
+        res = cli.Put(requestPath.c_str(), body, "text/plain");
     }
 
     if (!res) {

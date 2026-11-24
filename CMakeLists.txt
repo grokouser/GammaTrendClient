@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 COMPONENTS Widgets PrintSupport Network CONFIG REQUIRED)
+# OpenSSL is a transitive Qt dependency via vcpkg; link it explicitly for cpp-httplib SSL support
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows")
+find_package(OpenSSL REQUIRED)
 # qcustomplot ships as a qmake-built DLL + import libs (no CMake config)
 set(QCP_ROOT "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows")
 add_library(qcustomplot::qcustomplot SHARED IMPORTED)
@@ -24,9 +27,10 @@ add_executable(gt_api_test
 )
 
 if(TARGET qcustomplot::qcustomplot)
-  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport Qt6::Network qcustomplot::qcustomplot)
+  target_compile_definitions(gt_api_test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport Qt6::Network qcustomplot::qcustomplot OpenSSL::SSL OpenSSL::Crypto)
 else()
-  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport Qt6::Network qcustomplot)
+  target_link_libraries(gt_api_test PRIVATE Qt6::Widgets Qt6::PrintSupport Qt6::Network qcustomplot OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
 # app-local Qt runtime for running straight out of the build tree
