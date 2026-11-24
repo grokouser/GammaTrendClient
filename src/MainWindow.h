@@ -6,6 +6,9 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QSettings>
+#include <QMap>
+#include <QVector>
+#include <QString>
 
 class QCustomPlot;
 class QCPGraph;
@@ -20,6 +23,15 @@ class QLabel;
 class QDialog;
 class QListWidget;
 class QLineEdit;
+
+// A single chart data point from the server.
+// isotopeId is treated as a string (not a number) per spec.
+struct ChartPoint {
+    double time;        // unix seconds, already converted to local-time epoch
+    QString isotopeId;  // string ID, compared as text
+    double netArea;     // NetArea value
+    double mda;         // Minimum Detectable Activity
+};
 
 class MainWindow : public QMainWindow
 {
@@ -55,6 +67,7 @@ private slots:
 private:
     void buildUi();
     void replotMain();
+    void replotChartData();       // re-plot isotope trend lines with current bin/MDA settings
     void buildDailyPlot();
     void updateNavRect();
     void setSelectRange(double a, double b);
@@ -68,6 +81,9 @@ private:
     TelemetryData m_raw;
     int m_binSec = 300;          // current display bin (seconds)
     int m_smoothMin = 0;         // moving-average window (minutes, 0 = off)
+
+    // parsed chart data (isotope trend lines)
+    QVector<ChartPoint> m_chartPoints;
 
     // base URL for the server HTTP API (e.g. https://rms.h3dgamma.com/api or http://localhost:22438/api)
     std::string m_baseUrl = "https://rms.h3dgamma.com/api";
@@ -83,6 +99,7 @@ private:
     QCheckBox   *m_cbErrors = nullptr;
     QCheckBox   *m_cbGpu = nullptr;
     QCheckBox   *m_cbCpu = nullptr;
+    QCheckBox   *m_cbIncludeMda = nullptr;   // Include MDA in chart values
     QPushButton *m_testBtn = nullptr;
     QPushButton *m_showDetectorsBtn = nullptr;
     QPushButton *m_showLocationsBtn = nullptr;

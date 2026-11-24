@@ -29,6 +29,7 @@
 #include <QTextEdit>
 #include <QSettings>
 #include <cmath>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // Client-side logging: append-only log file with a big banner on each launch.
@@ -121,6 +122,30 @@ static void binMean(const QVector<double> &key, const QVector<double> &v,
     if (cnt > 0) { outKey.append(binStart + binSec * 0.5); outVal.append(sum / cnt); }
 }
 
+// bin sums over uniform bins of binSec for chart (isotope) data.
+// Handles gaps (empty bins skipped) and overlaps (multiple points at same time all summed).
+static void binChartData(const QVector<double> &key, const QVector<double> &val,
+                         double binSec,
+                         QVector<double> &outKey, QVector<double> &outVal)
+{
+    outKey.clear(); outVal.clear();
+    if (key.isEmpty()) return;
+
+    double binStart = key.first();
+    double binSum = 0.0;
+    int binCount = 0;
+
+    for (int i = 0; i < key.size(); ++i) {
+        while (key[i] >= binStart + binSec && binCount > 0) {
+            outKey.append(binStart + binSec * 0.5);
+            outVal.append(binSum);
+            binSum = 0.0; binCount = 0; binStart += binSec;
+        }
+        binSum += val[i]; ++binCount;
+    }
+    if (binCount > 0) { outKey.append(binStart + binSec * 0.5); outVal.append(binSum); }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP GET helper. Uses cpp-httplib; auto-selects SSLClient for https:// URLs.
 // ---------------------------------------------------------------------------
@@ -141,7 +166,7 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
 
     // Construct the base URL (scheme + host + port, no path) from m_baseUrl
     // m_baseUrl may include a path prefix (e.g. https://rms.h3dgamma.com/api).
-    // Preserve the path prefix so requests go to the correct URL (e.g. /api/charts).
+    // Preserve the path prefix so requests go to the correct endpoint (e.g. /api/charts).
     std::string baseUrl = m_baseUrl;
     size_t pathStart = baseUrl.find('/', 8); // find first '/' after scheme://
     std::string pathPrefix;
@@ -337,9 +362,11 @@ void MainWindow::buildUi()
     m_cbErrors   = new QCheckBox(QStringLiteral("Errors"));   m_cbErrors->setChecked(true);
     m_cbGpu      = new QCheckBox(QStringLiteral("GPU temp")); m_cbGpu->setChecked(true);
     m_cbCpu      = new QCheckBox(QStringLiteral("CPU temp")); m_cbCpu->setChecked(true);
+    m_cbIncludeMda = new QCheckBox(QStringLiteral("Include MDA")); m_cbIncludeMda->setChecked(false);
     QHBoxLayout *cbs = new QHBoxLayout;
     cbs->addWidget(m_cbRequests); cbs->addWidget(m_cbErrors);
     cbs->addSpacing(16); cbs->addWidget(m_cbGpu); cbs->addWidget(m_cbCpu);
+    cbs->addSpacing(16); cbs->addWidget(m_cbIncludeMda);
     cbs->addStretch();
     ctrl->addLayout(cbs, 3, 0, 1, 6);
     rootLay->addLayout(ctrl);
@@ -432,6 +459,7 @@ void MainWindow::buildUi()
     connect(m_smoothSlider, &QSlider::valueChanged, this, &MainWindow::smoothingChanged);
     for (QCheckBox *cb : {m_cbRequests, m_cbErrors, m_cbGpu, m_cbCpu})
         connect(cb, &QCheckBox::toggled, this, [this]{ replotMain(); });
+    connect(m_cbIncludeMda, &QCheckBox::toggled, this, [this]{ replotChartData(); });
 
     // keep navigator rectangle + Y autoscale in sync with main x range
     connect(m_plot->xAxis, QOverload<const QCPRange &>::of(&QCPAxis::rangeChanged),
@@ -443,6 +471,8 @@ void MainWindow::binChanged(int idx)
     static const int secs[] = {60, 300, 900, 3600, 21600, 86400};
     m_binSec = secs[qBound(0, idx, 5)];
     replotMain();
+    if (!m_chartPoints.isEmpty())
+        replotChartData();
 }
 
 void MainWindow::smoothingChanged(int minutes)
@@ -469,6 +499,7 @@ void MainWindow::regenerate()
 void MainWindow::load(const TelemetryData &d)
 {
     m_raw = d;
+    m_chartPoints.clear();          // chart data cleared when telemetry loaded
     if (m_raw.count() == 0) return;
 
     // navigator overview: decimate to ~4000 pts
@@ -540,6 +571,87 @@ void MainWindow::replotMain()
     // autoscale Y axes to visible window (sampled so panning stays cheap)
     m_plot->yAxis->rescale(true);
     m_plot->yAxis2->rescale(true);
+    m_plot->replot(QCustomPlot::rpQueuedReplot);
+}
+
+void MainWindow::replotChartData()
+{
+    if (m_chartPoints.isEmpty()) return;
+
+    m_plot->clearGraphs();
+
+    // Build unique isotope ID list (treated as strings, not numbers)
+    QStringList isotopeIds;
+    QMap<QString, QVector<ChartPoint>> pointsByIsotope;
+    for (const ChartPoint &cp : m_chartPoints) {
+        if (!isotopeIds.contains(cp.isotopeId))
+            isotopeIds << cp.isotopeId;
+        pointsByIsotope[cp.isotopeId].append(cp);
+    }
+    std::sort(isotopeIds.begin(), isotopeIds.end());
+
+    // Color palette for multiple isotope lines
+    QVector<QColor> colors = {
+        QColor(0, 100, 200), QColor(200, 30, 30), QColor(0, 150, 0),
+        QColor(150, 0, 90), QColor(230, 130, 0), QColor(100, 100, 100),
+        QColor(0, 150, 150), QColor(150, 100, 0), QColor(120, 60, 180),
+        QColor(60, 120, 180)
+    };
+
+    bool includeMda = m_cbIncludeMda ? m_cbIncludeMda->isChecked() : false;
+
+    double overallMinTime = 1e18, overallMaxTime = -1e18;
+
+    int graphIdx = 0;
+    for (const QString &isoId : isotopeIds) {
+        QVector<ChartPoint> pts = pointsByIsotope[isoId];
+
+        // Sort by time (handles any ordering from server)
+        std::sort(pts.begin(), pts.end(), [](const ChartPoint &a, const ChartPoint &b) {
+            return a.time < b.time;
+        });
+
+        // Extract key/val vectors for binning
+        QVector<double> key, val;
+        key.reserve(pts.size());
+        val.reserve(pts.size());
+        for (const ChartPoint &cp : pts) {
+            key.append(cp.time);
+            val.append(includeMda ? cp.netArea + cp.mda : cp.netArea);
+        }
+
+        // Bin by the selected interval (summing values in each bin)
+        QVector<double> binX, binY;
+        binChartData(key, val, static_cast<double>(m_binSec), binX, binY);
+
+        if (binX.isEmpty()) continue;
+
+        // Create a trend line for this isotope
+        m_plot->addGraph();
+        m_plot->graph(graphIdx)->setName(QStringLiteral("Isotope %1").arg(isoId));
+        m_plot->graph(graphIdx)->setPen(QPen(colors[graphIdx % colors.size()], 1.2));
+        m_plot->graph(graphIdx)->setData(binX, binY, true);
+        m_plot->graph(graphIdx)->setAdaptiveSampling(true);
+
+        overallMinTime = qMin(overallMinTime, binX.first());
+        overallMaxTime = qMax(overallMaxTime, binX.last());
+
+        graphIdx++;
+    }
+
+    // Configure axes for isotope chart display
+    QCPAxisTickerDateTime *tick = new QCPAxisTickerDateTime;
+    tick->setDateTimeFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    tick->setTickCount(8);
+    m_plot->xAxis->setTicker(QSharedPointer<QCPAxisTickerDateTime>(tick));
+    m_plot->xAxis->setLabel(QStringLiteral("Date / time (local)"));
+    m_plot->yAxis->setLabel(includeMda ? QStringLiteral("Net Area + MDA") : QStringLiteral("Net Area"));
+    m_plot->legend->setVisible(true);
+
+    if (graphIdx > 0) {
+        m_plot->xAxis->setRange(overallMinTime, overallMaxTime);
+        m_plot->yAxis->rescale(true);
+    }
     m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
 
@@ -1028,8 +1140,9 @@ void MainWindow::loadChartData()
     }
     logDebug(QStringLiteral("loadChartData: user requested maxrows=%1").arg(maxRows));
 
-    // Step 3: clear the demo data from the GUI chart currently showing.
+    // Step 3: clear the demo data and any previous chart data from the GUI.
     m_raw = TelemetryData();
+    m_chartPoints.clear();
     m_plot->clearGraphs();
     m_navigator->clearGraphs();
     m_daily->clearPlottables();
@@ -1064,45 +1177,59 @@ void MainWindow::loadChartData()
     QJsonArray points = dataObj.value(QStringLiteral("points")).toArray();
     logDebug(QStringLiteral("loadChartData: received %1 points for chart %2").arg(points.size()).arg(chartId));
 
-    // Step 5: build plot data, converting unix timestamps to the user's local time zone.
-    QVector<double> x, y;
-    x.reserve(points.size());
-    y.reserve(points.size());
+    // Step 5: parse points into isotope-id-grouped data.
+    // Each point has: isotope_id (string), point_time (unix seconds), net_area (double), mda (double).
+    m_chartPoints.clear();
+    m_chartPoints.reserve(points.size());
 
     for (const QJsonValue &v : points) {
         QJsonObject pt = v.toObject();
-        qint64 unixSec = pt.value(QStringLiteral("point_time")).toVariant().toLongLong();
-        double netCounts = pt.value(QStringLiteral("net_counts")).toDouble();
 
-        // QDateTime::fromSecsSinceEpoch interprets as UTC; toLocalTime() converts
-        // to the user's (GUI process) time zone, then back to epoch seconds so
-        // QCustomPlot's date-time ticker shows local wall-clock time.
+        QString isotopeId = pt.value(QStringLiteral("isotope_id")).toString();
+        if (isotopeId.isEmpty()) {
+            // Fallback: try numeric id converted to string
+            isotopeId = QString::number(pt.value(QStringLiteral("isotope_id")).toVariant().toLongLong());
+        }
+
+        qint64 unixSec = pt.value(QStringLiteral("point_time")).toVariant().toLongLong();
+
+        // Convert unix timestamp to local-time epoch seconds so QCustomPlot's
+        // date-time ticker shows local wall-clock time.
         QDateTime utc = QDateTime::fromSecsSinceEpoch(unixSec, Qt::UTC);
         QDateTime local = utc.toLocalTime();
-        x.append(local.toSecsSinceEpoch());
-        y.append(netCounts);
+        double localSecs = local.toSecsSinceEpoch();
+
+        double netArea = pt.value(QStringLiteral("net_area")).toDouble();
+        double mda = pt.value(QStringLiteral("mda")).toDouble();
+
+        m_chartPoints.append({localSecs, isotopeId, netArea, mda});
     }
 
-    // Step 6: create a chart in the GUI using the data.
-    m_plot->addGraph();
-    m_plot->graph()->setName(QStringLiteral("Chart %1 Net Counts").arg(chartId));
-    m_plot->graph()->setPen(QPen(QColor(0, 100, 200), 1.2));
-    m_plot->graph()->setData(x, y, true);
+    // count unique isotopes for the debug log
+    QMap<QString, bool> seenIds;
+    for (const ChartPoint &cp : m_chartPoints)
+        seenIds[cp.isotopeId] = true;
+    logDebug(QStringLiteral("loadChartData: parsed %1 points across %2 unique isotope IDs")
+        .arg(m_chartPoints.size()).arg(seenIds.size()));
 
-    QCPAxisTickerDateTime *tick = new QCPAxisTickerDateTime;
-    tick->setDateTimeFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    tick->setTickCount(8);
-    m_plot->xAxis->setTicker(QSharedPointer<QCPAxisTickerDateTime>(tick));
-    m_plot->xAxis->setLabel(QStringLiteral("Date / time (local)"));
-    m_plot->yAxis->setLabel(QStringLiteral("Net Counts"));
-    m_plot->legend->setVisible(true);
-    m_plot->yAxis->rescale(true);
-    m_plot->xAxis->rescale(true);
-    m_plot->replot();
+    // Step 6: plot the data — one trend line per unique isotope ID.
+    replotChartData();
+
+    // Count unique isotopes for the status message
+    QMap<QString, bool> seen;
+    int uniqueIsotopes = 0;
+    for (const ChartPoint &cp : m_chartPoints) {
+        if (!seen.contains(cp.isotopeId)) {
+            seen[cp.isotopeId] = true;
+            uniqueIsotopes++;
+        }
+    }
 
     statusBar()->showMessage(
-        QStringLiteral("Loaded chart %1: %2 points").arg(chartId).arg(points.size()));
-    logDebug(QStringLiteral("loadChartData: successfully plotted chart %1 with %2 points").arg(chartId).arg(points.size()));
+        QStringLiteral("Loaded chart %1: %2 points, %3 isotope(s)")
+        .arg(chartId).arg(points.size()).arg(uniqueIsotopes));
+    logDebug(QStringLiteral("loadChartData: successfully plotted chart %1 with %2 points across %3 isotope(s)")
+        .arg(chartId).arg(points.size()).arg(uniqueIsotopes));
 }
 
 QPixmap MainWindow::renderSnapshot(int w, int h)
