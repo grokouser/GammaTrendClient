@@ -191,6 +191,12 @@ std::string MainWindow::httpGet(const std::string &path, int timeoutSec)
         httplib::Client cli(baseUrl);
         cli.set_connection_timeout(timeoutSec);
         cli.set_read_timeout(timeoutSec);
+
+        if (baseUrl.rfind("https://", 0) == 0 && m_allowSelfSignedSsl) {
+            cli.enable_server_certificate_verification(false);
+            logDebug(QStringLiteral("httpGet: SSL certificate verification disabled (self-signed allowed)."));
+        }
+
         res = cli.Get(requestPath.c_str());
     }
 
@@ -255,6 +261,12 @@ std::string MainWindow::httpPut(const std::string &path, const std::string &body
         httplib::Client cli(baseUrl);
         cli.set_connection_timeout(timeoutSec);
         cli.set_read_timeout(timeoutSec);
+
+        if (baseUrl.rfind("https://", 0) == 0 && m_allowSelfSignedSsl) {
+            cli.enable_server_certificate_verification(false);
+            logDebug(QStringLiteral("httpPut: SSL certificate verification disabled (self-signed allowed)."));
+        }
+
         // Prepend the path prefix (e.g. /api) so the request reaches the correct endpoint
         std::string requestPath = pathPrefix + "/" + fullPath;
         res = cli.Put(requestPath.c_str(), body, "text/plain");
@@ -282,6 +294,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     // Load persisted server URL from QSettings (falls back to default).
     QSettings settings("H3D", "GammaTrendClient");
     m_baseUrl = settings.value("serverUrl", QStringLiteral("https://rms.h3dgamma.com/api")).toString().toStdString();
+    m_allowSelfSignedSsl = settings.value("allowSelfSignedSsl", false).toBool();
 
     buildUi();
     writeLogBanner();
@@ -358,6 +371,14 @@ void MainWindow::buildUi()
     ctrl->addWidget(m_urlEdit, 4, 1, 1, 6);
     m_saveUrlBtn = new QPushButton(QStringLiteral("Save URL"));
     ctrl->addWidget(m_saveUrlBtn, 4, 7);
+
+    m_cbAllowSelfSignedSsl = new QCheckBox(QStringLiteral("Allow self-signed SSL certificates"));
+    m_cbAllowSelfSignedSsl->setChecked(m_allowSelfSignedSsl);
+    m_cbAllowSelfSignedSsl->setToolTip(QStringLiteral(
+        "Accept unverified (self-signed) HTTPS certificates. "
+        "Needed when connecting through an SSH tunnel to a server using a "
+        "self-signed NGINX certificate. Disable this for production servers."));
+    ctrl->addWidget(m_cbAllowSelfSignedSsl, 5, 1, 1, 6);
 
     m_cbRequests = new QCheckBox(QStringLiteral("Requests")); m_cbRequests->setChecked(true);
     m_cbErrors   = new QCheckBox(QStringLiteral("Errors"));   m_cbErrors->setChecked(true);
@@ -923,6 +944,17 @@ void MainWindow::deleteLicense()
 
 void MainWindow::testConnection()
 {
+    // Warn when connecting to HTTPS with self-signed certificates allowed.
+    if (m_baseUrl.rfind("https://", 0) == 0 && m_allowSelfSignedSsl) {
+        QMessageBox::warning(this, QStringLiteral("SSL certificate warning"),
+            QStringLiteral(
+                "You are connecting to an HTTPS server with self-signed certificate verification disabled.\n"
+                "The server's certificate will not be authenticated. "
+                "Only enable this for trusted servers (e.g. NGINX on localhost via SSH tunnel).\n"
+                "Continue anyway?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    }
+
     logDebug(QStringLiteral("testConnection: GET http://localhost:22438/detectors"));
     std::string body = httpGet("detectors", 5);
     if (body.empty()) {
@@ -1628,7 +1660,9 @@ void MainWindow::saveUrl()
     }
     QSettings settings("H3D", "GammaTrendClient");
     settings.setValue("serverUrl", url);
+    settings.setValue("allowSelfSignedSsl", m_cbAllowSelfSignedSsl->isChecked());
     m_baseUrl = url.toStdString();
+    m_allowSelfSignedSsl = m_cbAllowSelfSignedSsl->isChecked();
     logDebug(QStringLiteral("saveUrl: server URL set to %1").arg(url));
     QMessageBox::information(this, QStringLiteral("URL Saved"),
         QStringLiteral("Server URL saved: %1\nThis will be used on next launch.").arg(url));

@@ -95,6 +95,9 @@ private:
     // base URL for the server HTTP API (e.g. https://rms.h3dgamma.com/api or http://localhost:22438/api)
     std::string m_baseUrl = "https://rms.h3dgamma.com/api";
 
+    // Allow self-signed SSL certificates (e.g. NGINX on localhost via SSH tunnel)
+    bool m_allowSelfSignedSsl = false;
+
     // widgets
     QCustomPlot *m_plot = nullptr;      // main telemetry plot
     QCustomPlot *m_navigator = nullptr; // long-range overview + range selector
@@ -119,6 +122,7 @@ private:
     QPushButton *m_deleteLicenseBtn = nullptr;
     QLineEdit   *m_urlEdit = nullptr;
     QPushButton *m_saveUrlBtn = nullptr;
+    QCheckBox   *m_cbAllowSelfSignedSsl = nullptr;
 
     // navigator selection items
     QCPItemRect  *m_navRect = nullptr;
