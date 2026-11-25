@@ -23,6 +23,8 @@ class QLabel;
 class QDialog;
 class QListWidget;
 class QLineEdit;
+class QTimer;
+class QProgressBar;
 
 // A single chart data point from the server.
 // isotopeId is treated as a string (not a number) per spec.
@@ -57,6 +59,7 @@ private slots:
     void showLocations();
     void showCharts();
     void loadChartData();
+    void loadChartAll(qint64 chartId);
     void createChart();
     void deleteChart();
     void showLicenses();
@@ -71,6 +74,10 @@ private:
     void buildDailyPlot();
     void updateNavRect();
     void setSelectRange(double a, double b);
+
+    // Download a file from the server with progress reporting.
+    void downloadFile(const QString &urlPath, const QString &savePath,
+                      QProgressBar *progressBar, QLabel *statusLabel);
 
     // HTTP client helper (port 22438, or https://api.h3drms.com)
     // Returns the response body, or empty on failure.

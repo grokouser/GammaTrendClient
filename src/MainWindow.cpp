@@ -18,6 +18,7 @@
 #include <QGuiApplication>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QThread>
 #include <QDialog>
 #include <QListWidget>
 #include <QJsonDocument>
@@ -1085,10 +1086,12 @@ void MainWindow::loadChartData()
         return;
     }
 
-    // Step 2: show a dialog with all available charts for the user to pick.
+    // Step 2: show a dialog with all available charts and command selection.
     QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("Select Chart"));
+    dialog.setWindowTitle(QStringLiteral("Load Chart Data"));
     QVBoxLayout *lay = new QVBoxLayout(&dialog);
+    lay->addWidget(new QLabel(QStringLiteral("Select a chart and the command to run:"), &dialog));
+
     QListWidget *list = new QListWidget(&dialog);
     QHash<QString, qint64> chartIdByName;
     for (const QJsonValue &v : charts) {
@@ -1099,6 +1102,12 @@ void MainWindow::loadChartData()
         chartIdByName.insert(name, id);
     }
     lay->addWidget(list);
+
+    QComboBox *cmdCombo = new QComboBox(&dialog);
+    cmdCombo->addItems({QStringLiteral("chart-data"), QStringLiteral("chart-tail"), QStringLiteral("chart-all")});
+    lay->addWidget(new QLabel(QStringLiteral("Command:"), &dialog));
+    lay->addWidget(cmdCombo);
+
     QPushButton *okBtn = new QPushButton(QStringLiteral("Load"), &dialog);
     QPushButton *cancelBtn = new QPushButton(QStringLiteral("Cancel"), &dialog);
     QHBoxLayout *btnLay = new QHBoxLayout;
@@ -1127,7 +1136,14 @@ void MainWindow::loadChartData()
         QMessageBox::warning(this, QStringLiteral("Load Chart Data failed"), err);
         return;
     }
-    logDebug(QStringLiteral("loadChartData: selected chart id=%1 name=%2").arg(chartId).arg(selected->text()));
+    QString command = cmdCombo->currentText();
+    logDebug(QStringLiteral("loadChartData: selected chart id=%1 name=%2 command=%3")
+        .arg(chartId).arg(selected->text()).arg(command));
+
+    if (command == QStringLiteral("chart-all")) {
+        loadChartAll(chartId);
+        return;
+    }
 
     // Step 2.5: ask the user for the max rows to limit the chart data output.
     bool ok = false;
@@ -1150,8 +1166,13 @@ void MainWindow::loadChartData()
     m_navigator->replot();
     m_daily->replot();
 
-    // Step 4: GET /chartdata?id=<id>&maxrows=<N>
-    QString path = QStringLiteral("chartdata?id=%1&maxrows=%2").arg(chartId).arg(maxRows);
+    // Step 4: GET /chart-data or /chart-tail
+    QString path;
+    if (command == QStringLiteral("chart-tail")) {
+        path = QStringLiteral("chart-tail?id=%1&maxrows=%2").arg(chartId).arg(maxRows);
+    } else {
+        path = QStringLiteral("chart-data?id=%1&maxrows=%2").arg(chartId).arg(maxRows);
+    }
     logDebug(QStringLiteral("loadChartData: GET %1").arg(path));
     std::string dataResp = httpGet(path.toStdString(), 30);
     if (dataResp.empty()) {
@@ -1230,6 +1251,242 @@ void MainWindow::loadChartData()
         .arg(chartId).arg(points.size()).arg(uniqueIsotopes));
     logDebug(QStringLiteral("loadChartData: successfully plotted chart %1 with %2 points across %3 isotope(s)")
         .arg(chartId).arg(points.size()).arg(uniqueIsotopes));
+}
+
+void MainWindow::loadChartAll(qint64 chartId)
+{
+    // Step 1: Request chart-all (instant JSON status response)
+    QString path = QStringLiteral("chart-all?id=%1&mode=json").arg(chartId);
+    logDebug(QStringLiteral("loadChartAll: GET %1").arg(path));;
+    std::string resp = httpGet(path.toStdString(), 10);
+    if (resp.empty()) {
+        QString err = QStringLiteral("No response from chart-all for chart %1.").arg(chartId);
+        logError(QStringLiteral("loadChartAll: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Chart All failed"), err);
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(resp).toUtf8());
+    if (doc.isNull() || !doc.isObject()) {
+        QString err = QStringLiteral("Invalid JSON from chart-all: %1").arg(QString::fromStdString(resp));
+        logError(QStringLiteral("loadChartAll: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Chart All failed"), err);
+        return;
+    }
+
+    QJsonObject obj = doc.object();
+    QString statusUrl = obj.value(QStringLiteral("status_url")).toString();
+    QString fileName  = obj.value(QStringLiteral("file_name")).toString();
+    QString downloadUrl = obj.value(QStringLiteral("download_url")).toString();
+
+    if (statusUrl.isEmpty() || fileName.isEmpty() || downloadUrl.isEmpty()) {
+        QString err = QStringLiteral("Incomplete status response from chart-all.");
+        logError(QStringLiteral("loadChartAll: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Chart All failed"), err);
+        return;
+    }
+
+    // Step 2: Show progress dialog with two progress bars
+    QDialog progressDialog(this);
+    progressDialog.setWindowTitle(QStringLiteral("Chart All — Creating File"));
+    progressDialog.setModal(true);
+    QVBoxLayout *pLay = new QVBoxLayout(&progressDialog);
+
+    QLabel *statusLabel = new QLabel(QStringLiteral("Requesting file creation..."), &progressDialog);
+    pLay->addWidget(statusLabel);
+
+    QProgressBar *createProgress = new QProgressBar(&progressDialog);
+    createProgress->setRange(0, 100);
+    createProgress->setValue(0);
+    pLay->addWidget(createProgress);
+
+    QProgressBar *downloadProgress = new QProgressBar(&progressDialog);
+    downloadProgress->setRange(0, 100);
+    downloadProgress->setValue(0);
+    downloadProgress->hide();
+    pLay->addWidget(downloadProgress);
+
+    QPushButton *closeBtn = new QPushButton(QStringLiteral("Close"), &progressDialog);
+    closeBtn->setEnabled(false);
+    pLay->addWidget(closeBtn, 0, Qt::AlignRight);
+
+    progressDialog.show();
+
+    // Step 3: Poll the status URL until the file is ready
+    bool ready = false;
+    qint64 finalSize = 0;
+    int pollCount = 0;
+    const int maxPolls = 120;
+
+    while (!ready && pollCount < maxPolls) {
+        QCoreApplication::processEvents();
+        if (!progressDialog.isVisible()) {
+            return;
+        }
+
+        std::string statusResp = httpGet(statusUrl.toStdString(), 5);
+        if (!statusResp.empty()) {
+            QJsonDocument statusDoc = QJsonDocument::fromJson(QString::fromStdString(statusResp).toUtf8());
+            if (!statusDoc.isNull() && statusDoc.isObject()) {
+                QJsonObject statusObj = statusDoc.object();
+                ready = statusObj.value(QStringLiteral("ready")).toBool();
+                qint64 currentSize = statusObj.value(QStringLiteral("current_size")).toVariant().toLongLong();
+                finalSize = statusObj.value(QStringLiteral("final_size")).toVariant().toLongLong();
+
+                if (finalSize > 0) {
+                    int pct = int(100.0 * currentSize / finalSize);
+                    createProgress->setValue(pct);
+                    statusLabel->setText(QStringLiteral("Creating file... %1% (%2 / %3 bytes)")
+                        .arg(pct).arg(currentSize).arg(finalSize));
+                } else {
+                    statusLabel->setText(QStringLiteral("Creating file..."));
+                }
+            }
+        }
+
+        if (!ready) {
+            QThread::msleep(3000);
+            pollCount++;
+        }
+    }
+
+    if (!ready) {
+        statusLabel->setText(QStringLiteral("File creation timed out."));
+        closeBtn->setEnabled(true);
+        progressDialog.exec();
+        return;
+    }
+
+    // Step 4: Download the file
+    createProgress->hide();
+    downloadProgress->show();
+    statusLabel->setText(QStringLiteral("Downloading file..."));
+
+    QString savePath = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Save Chart All File"), fileName,
+        QStringLiteral("JSON files (*.json)"));
+    if (savePath.isEmpty()) {
+        closeBtn->setEnabled(true);
+        progressDialog.exec();
+        return;
+    }
+
+    downloadFile(downloadUrl, savePath, downloadProgress, statusLabel);
+
+    statusLabel->setText(QStringLiteral("Download complete! Saved to %1.").arg(savePath));
+    closeBtn->setEnabled(true);
+    progressDialog.exec();
+
+    // Step 5: Parse and plot the downloaded data
+    QFile file(savePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, QStringLiteral("Chart All"),
+            QStringLiteral("Could not open downloaded file for parsing."));
+        return;
+    }
+    QByteArray fileData = file.readAll();
+    file.close();
+
+    QJsonDocument dataDoc = QJsonDocument::fromJson(fileData);
+    if (dataDoc.isNull() || !dataDoc.isObject()) {
+        QMessageBox::warning(this, QStringLiteral("Chart All"),
+            QStringLiteral("Downloaded file is not valid JSON."));
+        return;
+    }
+
+    QJsonObject dataObj = dataDoc.object();
+    QJsonArray points = dataObj.value(QStringLiteral("points")).toArray();
+
+    m_raw = TelemetryData();
+    m_chartPoints.clear();
+    m_chartPoints.reserve(points.size());
+    m_plot->clearGraphs();
+    m_navigator->clearGraphs();
+    m_daily->clearPlottables();
+    m_plot->replot();
+    m_navigator->replot();
+    m_daily->replot();
+
+    for (const QJsonValue &v : points) {
+        QJsonObject pt = v.toObject();
+
+        QString isotopeId = pt.value(QStringLiteral("isotope_id")).toString();
+        if (isotopeId.isEmpty()) {
+            isotopeId = QString::number(pt.value(QStringLiteral("isotope_id")).toVariant().toLongLong());
+        }
+
+        qint64 unixSec = pt.value(QStringLiteral("point_time")).toVariant().toLongLong();
+
+        QDateTime utc = QDateTime::fromSecsSinceEpoch(unixSec, Qt::UTC);
+        QDateTime local = utc.toLocalTime();
+        double localSecs = local.toSecsSinceEpoch();
+
+        double netArea = pt.value(QStringLiteral("net_area")).toDouble();
+        double mda = pt.value(QStringLiteral("mda")).toDouble();
+
+        m_chartPoints.append({localSecs, isotopeId, netArea, mda});
+    }
+
+    replotChartData();
+
+    statusBar()->showMessage(
+        QStringLiteral("Chart All: loaded %1 points from chart %2").arg(points.size()).arg(chartId));
+    logDebug(QStringLiteral("loadChartAll: successfully plotted %1 points from chart %2")
+        .arg(points.size()).arg(chartId));
+}
+
+void MainWindow::downloadFile(const QString &urlPath, const QString &savePath,
+                              QProgressBar *progressBar, QLabel *statusLabel)
+{
+    std::string baseUrl = m_baseUrl;
+    size_t pathStart = baseUrl.find('/', 8);
+    std::string pathPrefix;
+    if (pathStart != std::string::npos) {
+        pathPrefix = m_baseUrl.substr(pathStart);
+        baseUrl = baseUrl.substr(0, pathStart);
+    }
+
+    std::string requestPath = pathPrefix + "/" + urlPath.toStdString();
+    logDebug(QStringLiteral("downloadFile: GET %1 -> %2")
+        .arg(QString::fromStdString(requestPath), savePath));
+
+    httplib::Client cli(baseUrl);
+    cli.set_connection_timeout(30);
+    cli.set_read_timeout(300);
+
+    QFile file(savePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        QString err = QStringLiteral("Could not open file for writing: %1").arg(savePath);
+        logError(QStringLiteral("downloadFile: %1").arg(err));
+        return;
+    }
+
+    qint64 downloadedBytes = 0;
+
+    auto res = cli.Get(requestPath.c_str(),
+        [&](const char *data, uint64_t len) {
+            if (file.isOpen()) {
+                file.write(data, static_cast<qint64>(len));
+                downloadedBytes += static_cast<qint64>(len);
+                statusLabel->setText(QStringLiteral("Downloading... %1 bytes").arg(downloadedBytes));
+                progressBar->setValue(0);
+                QCoreApplication::processEvents();
+            }
+            return true;
+        });
+
+    file.close();
+
+    if (!res || res->status != 200) {
+        QString err = QStringLiteral("Download failed.");
+        if (res) err = QStringLiteral("HTTP %1 from server.").arg(res->status);
+        logError(QStringLiteral("downloadFile: %1").arg(err));
+        QMessageBox::warning(this, QStringLiteral("Download failed"), err);
+        return;
+    }
+
+    progressBar->setValue(100);
+    statusLabel->setText(QStringLiteral("Download complete."));
 }
 
 QPixmap MainWindow::renderSnapshot(int w, int h)
